@@ -408,7 +408,11 @@ class ThemeManager:
             gridline-color: {c["grid"]};
             selection-background-color: {c["sel_bg"]};
             selection-color: {c["sel_fg"]};
+            border: 1px solid {c["input_border"]};
             {_font_css(tree_font)}
+        }}
+        QTreeView:focus {{
+            border: 1px solid {c["input_focus_border"]};
         }}
 
         QHeaderView::section {{
@@ -430,6 +434,9 @@ class ThemeManager:
         }}
         QPushButton:hover {{ background: {c["btn_hover_bg"]}; }}
         QPushButton:pressed {{ background: {c["btn_pressed_bg"]}; }}
+        QPushButton:focus, QToolButton:focus {{
+            border: 1px solid {c["input_focus_border"]};
+        }}
         QPushButton:disabled {{
             background: {c["btn_disabled_bg"]}; color: {c["btn_disabled_fg"]};
             border-color: {c["btn_disabled_bg"]};
@@ -456,6 +463,14 @@ class ThemeManager:
             {_font_css(search_font)}
         }}
         QLineEdit#SearchBar:focus {{ border: 1px solid {c["search_focus_border"]}; }}
+
+        QListWidget, QUndoView, QTextBrowser {{
+            border: 1px solid {c["input_border"]};
+            border-radius: 6px;
+        }}
+        QListWidget:focus, QUndoView:focus, QTextBrowser:focus {{
+            border: 1px solid {c["input_focus_border"]};
+        }}
 
         QToolButton#SearchClear {{
             background: {c["search_clear_bg"]};

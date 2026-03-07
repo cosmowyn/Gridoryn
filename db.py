@@ -3,9 +3,25 @@ import sqlite3
 from calendar import monthrange
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
+from pathlib import Path
+from app_paths import app_data_dir
+from project_intelligence import analyze_projects, analyze_workload
 
 
 RECURRENCE_FREQUENCIES = {"daily", "weekly", "monthly", "yearly"}
+LATEST_SCHEMA_VERSION = 4
+
+
+class DatabaseError(RuntimeError):
+    pass
+
+
+class DatabaseMigrationError(DatabaseError):
+    pass
+
+
+class IntegrityRepairError(DatabaseError):
+    pass
 
 
 def now_iso() -> str:
@@ -61,10 +77,18 @@ def _advance_recurrence_due(d: date, frequency: str) -> date:
 class Database:
     def __init__(self, path: str):
         self.path = path
+        self._pre_migration_backup_path: str | None = None
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
-        self._configure()
-        self._migrate()
+        try:
+            self._configure()
+            self._migrate_with_validation()
+        except Exception:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            raise
 
     def _configure(self):
         cur = self.conn.cursor()
@@ -74,10 +98,150 @@ class Database:
         cur.execute("PRAGMA busy_timeout=4000;")
         self.conn.commit()
 
-    def _migrate(self):
+    def schema_user_version(self) -> int:
         cur = self.conn.cursor()
         cur.execute("PRAGMA user_version;")
-        ver = int(cur.fetchone()[0])
+        row = cur.fetchone()
+        return int(row[0] if row is not None else 0)
+
+    def pre_migration_backup_path(self) -> str | None:
+        return self._pre_migration_backup_path
+
+    def _migration_backups_dir(self) -> Path:
+        path = Path(app_data_dir()) / "migration_backups"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _database_file_has_content(self) -> bool:
+        if not self.path or self.path == ":memory:":
+            return False
+        try:
+            p = Path(self.path)
+            return p.exists() and p.stat().st_size > 0
+        except Exception:
+            return False
+
+    def _create_pre_migration_backup(self, from_version: int, to_version: int) -> str:
+        if not self._database_file_has_content():
+            raise DatabaseMigrationError("Cannot create a pre-migration backup for a missing database file.")
+
+        src_path = Path(self.path)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = self._migration_backups_dir() / f"{src_path.stem}_v{from_version}_to_v{to_version}_{ts}.sqlite3"
+        backup_conn = None
+        try:
+            backup_conn = sqlite3.connect(str(dest))
+            self.conn.backup(backup_conn)
+            backup_conn.commit()
+        except Exception as e:
+            try:
+                dest.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise DatabaseMigrationError(f"Failed to create pre-migration backup: {e}") from e
+        finally:
+            if backup_conn is not None:
+                try:
+                    backup_conn.close()
+                except Exception:
+                    pass
+        return str(dest)
+
+    def _validate_schema(self, expected_version: int = LATEST_SCHEMA_VERSION) -> dict:
+        issues: list[str] = []
+        version = self.schema_user_version()
+        if version != int(expected_version):
+            issues.append(f"Expected schema user_version {expected_version}, found {version}.")
+
+        required_tables = {
+            "tasks",
+            "custom_columns",
+            "task_custom_values",
+            "custom_column_list_values",
+            "recurrence_rules",
+            "tags",
+            "task_tags",
+            "saved_filter_views",
+            "task_attachments",
+            "task_dependencies",
+            "task_templates",
+        }
+        cur = self.conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        existing_tables = {str(r["name"]) for r in cur.fetchall()}
+        for name in sorted(required_tables - existing_tables):
+            issues.append(f"Missing required table: {name}")
+
+        required_task_columns = {
+            "id",
+            "description",
+            "due_date",
+            "last_update",
+            "priority",
+            "status",
+            "parent_id",
+            "sort_order",
+            "is_collapsed",
+            "notes",
+            "archived_at",
+            "planned_bucket",
+            "effort_minutes",
+            "actual_minutes",
+            "timer_started_at",
+            "waiting_for",
+            "recurrence_rule_id",
+            "recurrence_origin_task_id",
+            "is_generated_occurrence",
+            "reminder_at",
+            "reminder_minutes_before",
+            "reminder_fired_at",
+        }
+        if "tasks" in existing_tables:
+            cur.execute("PRAGMA table_info(tasks);")
+            task_columns = {str(r["name"]) for r in cur.fetchall()}
+            for name in sorted(required_task_columns - task_columns):
+                issues.append(f"Missing required tasks column: {name}")
+
+        return {"ok": not issues, "schema_version": version, "issues": issues}
+
+    def schema_validation_report(self) -> dict:
+        return self._validate_schema(expected_version=LATEST_SCHEMA_VERSION)
+
+    def _migrate_with_validation(self):
+        start_version = self.schema_user_version()
+        if start_version < 0:
+            raise DatabaseMigrationError(f"Invalid schema user_version: {start_version}")
+        if start_version > LATEST_SCHEMA_VERSION:
+            raise DatabaseMigrationError(
+                f"Database schema version {start_version} is newer than this app supports ({LATEST_SCHEMA_VERSION})."
+            )
+
+        if start_version < LATEST_SCHEMA_VERSION and self._database_file_has_content():
+            self._pre_migration_backup_path = self._create_pre_migration_backup(start_version, LATEST_SCHEMA_VERSION)
+
+        try:
+            self._migrate()
+            validation = self._validate_schema(expected_version=LATEST_SCHEMA_VERSION)
+            if not validation["ok"]:
+                message = "Migration completed but schema validation failed:\n- " + "\n- ".join(validation["issues"])
+                if self._pre_migration_backup_path:
+                    message += f"\nPre-migration backup: {self._pre_migration_backup_path}"
+                raise DatabaseMigrationError(message)
+        except DatabaseMigrationError:
+            raise
+        except Exception as e:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            message = f"Database migration failed from schema version {start_version}: {e}"
+            if self._pre_migration_backup_path:
+                message += f"\nPre-migration backup: {self._pre_migration_backup_path}"
+            raise DatabaseMigrationError(message) from e
+
+    def _migrate(self):
+        cur = self.conn.cursor()
+        ver = self.schema_user_version()
 
         if ver < 1:
             self._create_v1()
@@ -335,6 +499,351 @@ class Database:
             self.conn.rollback()
             raise
 
+    # ---------- Diagnostics / integrity ----------
+    def _broken_parent_links(self) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT t.id, t.description, t.parent_id
+            FROM tasks t
+            LEFT JOIN tasks p ON p.id = t.parent_id
+            WHERE t.parent_id IS NOT NULL
+              AND p.id IS NULL
+            ORDER BY t.id;
+            """
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def _invalid_sibling_sort_order_groups(self) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, parent_id, sort_order, description
+            FROM tasks
+            ORDER BY COALESCE(parent_id, 0), sort_order ASC, id ASC;
+            """
+        )
+        by_parent: dict[int | None, list[dict]] = {}
+        for row in cur.fetchall():
+            item = dict(row)
+            pid = item.get("parent_id")
+            by_parent.setdefault(pid, []).append(item)
+
+        groups: list[dict] = []
+        for parent_id, rows in by_parent.items():
+            expected_rows = []
+            invalid = False
+            for pos, row in enumerate(rows, start=1):
+                current = int(row.get("sort_order") or 0)
+                if current != pos:
+                    invalid = True
+                expected_rows.append(
+                    {
+                        "id": int(row["id"]),
+                        "description": str(row.get("description") or ""),
+                        "current_sort_order": current,
+                        "expected_sort_order": pos,
+                    }
+                )
+            if invalid:
+                groups.append(
+                    {
+                        "parent_id": parent_id,
+                        "task_count": len(rows),
+                        "rows": expected_rows,
+                    }
+                )
+        return groups
+
+    def _orphaned_custom_values(self) -> dict[str, list[dict]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT tcv.task_id, tcv.column_id, tcv.value
+            FROM task_custom_values tcv
+            LEFT JOIN tasks t ON t.id = tcv.task_id
+            WHERE t.id IS NULL
+            ORDER BY tcv.task_id, tcv.column_id;
+            """
+        )
+        missing_tasks = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT tcv.task_id, tcv.column_id, tcv.value
+            FROM task_custom_values tcv
+            LEFT JOIN custom_columns cc ON cc.id = tcv.column_id
+            WHERE cc.id IS NULL
+            ORDER BY tcv.task_id, tcv.column_id;
+            """
+        )
+        missing_columns = [dict(r) for r in cur.fetchall()]
+        return {"missing_tasks": missing_tasks, "missing_columns": missing_columns}
+
+    def _malformed_recurrence_report(self) -> dict[str, list[dict]]:
+        cur = self.conn.cursor()
+        placeholders = ", ".join(["?"] * len(RECURRENCE_FREQUENCIES))
+
+        cur.execute(
+            f"""
+            SELECT id, task_id, frequency, create_next_on_done, is_active
+            FROM recurrence_rules
+            WHERE LOWER(COALESCE(frequency, '')) NOT IN ({placeholders})
+            ORDER BY id;
+            """,
+            tuple(sorted(RECURRENCE_FREQUENCIES)),
+        )
+        invalid_frequency_rules = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT rr.id, rr.task_id, rr.frequency
+            FROM recurrence_rules rr
+            LEFT JOIN tasks t ON t.id = rr.task_id
+            WHERE t.id IS NULL
+            ORDER BY rr.id;
+            """
+        )
+        rules_missing_task = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT t.id, t.description, t.recurrence_rule_id
+            FROM tasks t
+            LEFT JOIN recurrence_rules rr ON rr.id = t.recurrence_rule_id
+            WHERE t.recurrence_rule_id IS NOT NULL
+              AND rr.id IS NULL
+            ORDER BY t.id;
+            """
+        )
+        task_rule_missing = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT t.id, t.description, t.recurrence_rule_id, rr.task_id AS rule_task_id
+            FROM tasks t
+            JOIN recurrence_rules rr ON rr.id = t.recurrence_rule_id
+            WHERE rr.task_id <> t.id
+            ORDER BY t.id;
+            """
+        )
+        task_rule_mismatch = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT t.id, t.description, t.recurrence_origin_task_id
+            FROM tasks t
+            LEFT JOIN tasks origin ON origin.id = t.recurrence_origin_task_id
+            WHERE t.is_generated_occurrence = 1
+              AND t.recurrence_origin_task_id IS NOT NULL
+              AND origin.id IS NULL
+            ORDER BY t.id;
+            """
+        )
+        generated_origin_missing = [dict(r) for r in cur.fetchall()]
+
+        return {
+            "invalid_frequency_rules": invalid_frequency_rules,
+            "rules_missing_task": rules_missing_task,
+            "task_rule_missing": task_rule_missing,
+            "task_rule_mismatch": task_rule_mismatch,
+            "generated_origin_missing": generated_origin_missing,
+        }
+
+    def _missing_file_attachments(self) -> list[dict]:
+        rows = self.fetch_all_attachments()
+        missing = []
+        for row in rows:
+            path = str(row.get("path") or "")
+            if not path:
+                missing.append(dict(row))
+                continue
+            try:
+                if not Path(path).exists():
+                    missing.append(dict(row))
+            except Exception:
+                missing.append(dict(row))
+        return missing
+
+    def fetch_all_attachments(self) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, task_id, path, label, created_at
+            FROM task_attachments
+            ORDER BY task_id, id;
+            """
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def collect_integrity_report(self, include_attachment_scan: bool = True) -> dict:
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA integrity_check;")
+        integrity_rows = [str(r[0]) for r in cur.fetchall()]
+        integrity_ok = len(integrity_rows) == 1 and integrity_rows[0].lower() == "ok"
+
+        cur.execute("PRAGMA foreign_key_check;")
+        foreign_key_violations = [
+            {
+                "table": str(r[0]),
+                "rowid": int(r[1]),
+                "parent": str(r[2]),
+                "fkid": int(r[3]),
+            }
+            for r in cur.fetchall()
+        ]
+
+        broken_parents = self._broken_parent_links()
+        invalid_sort_groups = self._invalid_sibling_sort_order_groups()
+        orphaned_custom_values = self._orphaned_custom_values()
+        malformed_recurrence = self._malformed_recurrence_report()
+        missing_attachments = self._missing_file_attachments() if include_attachment_scan else []
+
+        recurrence_issue_count = sum(len(v) for v in malformed_recurrence.values())
+        orphan_issue_count = (
+            len(orphaned_custom_values["missing_tasks"]) +
+            len(orphaned_custom_values["missing_columns"])
+        )
+        preview = {
+            "reset_broken_parent_links": len(broken_parents),
+            "normalize_sort_order_groups": len(invalid_sort_groups),
+            "delete_orphaned_custom_values": orphan_issue_count,
+            "repair_recurrence_records": recurrence_issue_count,
+        }
+
+        return {
+            "schema_version": self.schema_user_version(),
+            "integrity_check": {
+                "ok": integrity_ok,
+                "result": integrity_rows[0] if integrity_rows else "unknown",
+                "details": integrity_rows,
+            },
+            "foreign_key_violations": foreign_key_violations,
+            "broken_parent_links": broken_parents,
+            "invalid_sibling_sort_orders": invalid_sort_groups,
+            "orphaned_custom_values": orphaned_custom_values,
+            "malformed_recurrence": malformed_recurrence,
+            "missing_file_attachments": missing_attachments,
+            "repair_preview": preview,
+        }
+
+    def repair_integrity_issues(self, report: dict | None = None) -> dict:
+        source_report = report or self.collect_integrity_report(include_attachment_scan=False)
+        broken_parents = list(source_report.get("broken_parent_links") or [])
+        orphaned_custom_values = dict(source_report.get("orphaned_custom_values") or {})
+        malformed_recurrence = dict(source_report.get("malformed_recurrence") or {})
+
+        repaired = {
+            "reset_broken_parent_links": 0,
+            "normalized_sort_order_groups": 0,
+            "normalized_sort_order_rows": 0,
+            "deleted_orphaned_custom_values": 0,
+            "deleted_invalid_recurrence_rules": 0,
+            "cleared_invalid_task_recurrence_refs": 0,
+            "cleared_invalid_generated_origins": 0,
+        }
+
+        try:
+            with self.tx():
+                cur = self.conn.cursor()
+                stamp = now_iso()
+
+                for row in broken_parents:
+                    cur.execute(
+                        "UPDATE tasks SET parent_id=NULL, last_update=? WHERE id=?;",
+                        (stamp, int(row["id"])),
+                    )
+                    repaired["reset_broken_parent_links"] += int(cur.rowcount or 0)
+
+                for row in orphaned_custom_values.get("missing_tasks") or []:
+                    cur.execute(
+                        "DELETE FROM task_custom_values WHERE task_id=? AND column_id=?;",
+                        (int(row["task_id"]), int(row["column_id"])),
+                    )
+                    repaired["deleted_orphaned_custom_values"] += int(cur.rowcount or 0)
+
+                for row in orphaned_custom_values.get("missing_columns") or []:
+                    cur.execute(
+                        "DELETE FROM task_custom_values WHERE task_id=? AND column_id=?;",
+                        (int(row["task_id"]), int(row["column_id"])),
+                    )
+                    repaired["deleted_orphaned_custom_values"] += int(cur.rowcount or 0)
+
+                invalid_rule_ids = {
+                    int(r["id"]) for r in (malformed_recurrence.get("invalid_frequency_rules") or []) if r.get("id") is not None
+                }
+                invalid_rule_ids.update(
+                    int(r["id"]) for r in (malformed_recurrence.get("rules_missing_task") or []) if r.get("id") is not None
+                )
+                for rule_id in sorted(invalid_rule_ids):
+                    cur.execute("DELETE FROM recurrence_rules WHERE id=?;", (int(rule_id),))
+                    repaired["deleted_invalid_recurrence_rules"] += int(cur.rowcount or 0)
+
+                task_ids_to_clear = {
+                    int(r["id"]) for r in (malformed_recurrence.get("task_rule_missing") or []) if r.get("id") is not None
+                }
+                task_ids_to_clear.update(
+                    int(r["task_id"])
+                    for r in (malformed_recurrence.get("invalid_frequency_rules") or [])
+                    if r.get("task_id") is not None
+                )
+                task_ids_to_clear.update(
+                    int(r["id"]) for r in (malformed_recurrence.get("task_rule_mismatch") or []) if r.get("id") is not None
+                )
+                for task_id in sorted(task_ids_to_clear):
+                    cur.execute(
+                        """
+                        UPDATE tasks
+                        SET recurrence_rule_id=NULL, last_update=?
+                        WHERE id=?;
+                        """,
+                        (stamp, int(task_id)),
+                    )
+                    repaired["cleared_invalid_task_recurrence_refs"] += int(cur.rowcount or 0)
+
+                for row in malformed_recurrence.get("generated_origin_missing") or []:
+                    cur.execute(
+                        """
+                        UPDATE tasks
+                        SET recurrence_origin_task_id=NULL,
+                            is_generated_occurrence=0,
+                            last_update=?
+                        WHERE id=?;
+                        """,
+                        (stamp, int(row["id"])),
+                    )
+                    repaired["cleared_invalid_generated_origins"] += int(cur.rowcount or 0)
+
+                sort_groups = self._invalid_sibling_sort_order_groups()
+                for group in sort_groups:
+                    changed_in_group = 0
+                    for row in group.get("rows") or []:
+                        current = int(row.get("current_sort_order") or 0)
+                        expected = int(row.get("expected_sort_order") or 0)
+                        if current == expected:
+                            continue
+                        cur.execute(
+                            "UPDATE tasks SET sort_order=?, last_update=? WHERE id=?;",
+                            (expected, stamp, int(row["id"])),
+                        )
+                        changed_in_group += int(cur.rowcount or 0)
+                    if changed_in_group > 0:
+                        repaired["normalized_sort_order_groups"] += 1
+                        repaired["normalized_sort_order_rows"] += changed_in_group
+        except Exception as e:
+            raise IntegrityRepairError(f"Integrity repair failed: {e}") from e
+
+        post_report = self.collect_integrity_report(include_attachment_scan=False)
+        repaired["remaining_issue_count"] = (
+            len(post_report.get("broken_parent_links") or []) +
+            len(post_report.get("invalid_sibling_sort_orders") or []) +
+            len((post_report.get("orphaned_custom_values") or {}).get("missing_tasks") or []) +
+            len((post_report.get("orphaned_custom_values") or {}).get("missing_columns") or []) +
+            sum(len(v) for v in (post_report.get("malformed_recurrence") or {}).values())
+        )
+        repaired["post_report"] = post_report
+        return repaired
+
     # ---------- Custom columns ----------
     def fetch_custom_columns(self):
         cur = self.conn.cursor()
@@ -495,6 +1004,17 @@ class Database:
 
         cur.execute(
             """
+            SELECT task_id, depends_on_task_id
+            FROM task_dependencies
+            ORDER BY task_id, depends_on_task_id;
+            """
+        )
+        dependency_ids_by_task: dict[int, list[int]] = {}
+        for r in cur.fetchall():
+            dependency_ids_by_task.setdefault(int(r["task_id"]), []).append(int(r["depends_on_task_id"]))
+
+        cur.execute(
+            """
             SELECT task_id, frequency, create_next_on_done, is_active
             FROM recurrence_rules;
             """
@@ -505,6 +1025,7 @@ class Database:
             t["custom"] = values_by_task.get(t["id"], {})
             t["tags"] = tags_by_task.get(int(t["id"]), [])
             t["blocked_by_count"] = deps_by_task.get(int(t["id"]), 0)
+            t["dependencies"] = dependency_ids_by_task.get(int(t["id"]), [])
             t["recurrence"] = recurrence_by_task.get(int(t["id"]))
         return tasks
 
@@ -535,6 +1056,18 @@ class Database:
         )
         task["custom"] = {int(x["column_id"]): x["value"] for x in cur.fetchall()}
         task["tags"] = self.fetch_task_tags(int(task_id))
+
+        cur.execute(
+            """
+            SELECT COUNT(*) AS dep_count
+            FROM task_dependencies
+            WHERE task_id=?;
+            """,
+            (int(task_id),),
+        )
+        dep_row = cur.fetchone()
+        task["blocked_by_count"] = int(dep_row["dep_count"]) if dep_row else 0
+        task["dependencies"] = [int(d["id"]) for d in self.fetch_dependencies(int(task_id))]
 
         cur.execute(
             """
@@ -1020,97 +1553,7 @@ class Database:
         return [dict(r) for r in cur.fetchall()]
 
     def fetch_project_health(self, stalled_days: int = 14) -> list[dict]:
-        tasks = self.fetch_tasks()
-        children_by_parent: dict[int, list[dict]] = {}
-        for t in tasks:
-            pid = t.get("parent_id")
-            if pid is None:
-                continue
-            try:
-                parent_id = int(pid)
-            except Exception:
-                continue
-            children_by_parent.setdefault(parent_id, []).append(t)
-
-        today = date.today()
-        out: list[dict] = []
-        stale_threshold = max(1, int(stalled_days or 14))
-
-        for t in tasks:
-            if str(t.get("archived_at") or "").strip():
-                continue
-            tid = int(t["id"])
-            children = [c for c in children_by_parent.get(tid, []) if not str(c.get("archived_at") or "").strip()]
-            if not children:
-                continue
-
-            children.sort(key=lambda c: (int(c.get("sort_order") or 0), int(c.get("id") or 0)))
-            open_children = [c for c in children if str(c.get("status") or "") != "Done"]
-            blocked_open = [
-                c
-                for c in open_children
-                if int(c.get("blocked_by_count") or 0) > 0 or str(c.get("waiting_for") or "").strip()
-            ]
-
-            next_action = None
-            for c in open_children:
-                if int(c.get("blocked_by_count") or 0) > 0:
-                    continue
-                if str(c.get("waiting_for") or "").strip():
-                    continue
-                next_action = c
-                break
-
-            no_next_action = bool(open_children) and next_action is None
-            blocked = bool(open_children) and next_action is None and bool(blocked_open)
-
-            latest = _parse_iso_datetime(str(t.get("last_update") or "")) or datetime.now()
-            for c in open_children:
-                dt = _parse_iso_datetime(str(c.get("last_update") or ""))
-                if dt and dt > latest:
-                    latest = dt
-            stale_age_days = max(0, (today - latest.date()).days)
-            stalled = bool(open_children) and (no_next_action or stale_age_days >= stale_threshold)
-
-            note_parts = [f"open {len(open_children)}/{len(children)}"]
-            if next_action is not None:
-                note_parts.append(f"next: {str(next_action.get('description') or '').strip()}")
-            elif no_next_action:
-                note_parts.append("next: none")
-            if blocked:
-                note_parts.append("blocked")
-            if stale_age_days >= stale_threshold:
-                note_parts.append(f"stale {stale_age_days}d")
-
-            out.append(
-                {
-                    "id": tid,
-                    "description": str(t.get("description") or ""),
-                    "status": str(t.get("status") or ""),
-                    "due_date": t.get("due_date"),
-                    "priority": int(t.get("priority") or 3),
-                    "child_total": len(children),
-                    "child_open": len(open_children),
-                    "next_action_task_id": int(next_action["id"]) if next_action else None,
-                    "next_action_description": str(next_action.get("description") or "") if next_action else "",
-                    "no_next_action": bool(no_next_action),
-                    "blocked": bool(blocked),
-                    "stalled": bool(stalled),
-                    "stale_days": int(stale_age_days),
-                    "review_note": " | ".join(note_parts),
-                }
-            )
-
-        out.sort(
-            key=lambda r: (
-                0 if r.get("stalled") else 1,
-                0 if r.get("blocked") else 1,
-                int(r.get("priority") or 99),
-                str(r.get("description") or "").lower(),
-                int(r.get("id") or 0),
-            )
-        )
-        return out
+        return analyze_projects(self.fetch_tasks(), stalled_days=int(stalled_days or 14), today=date.today())
 
     def project_health_for_task(self, task_id: int, stalled_days: int = 14) -> dict | None:
         tid = int(task_id)
@@ -1225,9 +1668,130 @@ class Database:
 
         return data
 
+    def fetch_focus_data(self, include_waiting: bool = False, limit: int = 40) -> list[dict]:
+        tasks = self.fetch_tasks()
+        today = date.today()
+        max_items = max(1, int(limit or 40))
+
+        children_by_parent: dict[int, list[dict]] = {}
+        by_id: dict[int, dict] = {}
+        for task in tasks:
+            tid = int(task["id"])
+            by_id[tid] = task
+            pid = task.get("parent_id")
+            if pid is None:
+                continue
+            try:
+                parent_id = int(pid)
+            except Exception:
+                continue
+            children_by_parent.setdefault(parent_id, []).append(task)
+
+        section_order = {
+            "Overdue": 0,
+            "Today": 1,
+            "Next action": 2,
+            "Ready next": 3,
+            "Waiting/Blocked": 4,
+        }
+        out_by_id: dict[int, dict] = {}
+
+        def _is_active(task: dict) -> bool:
+            return not str(task.get("archived_at") or "").strip() and str(task.get("status") or "") != "Done"
+
+        def _is_blocked_or_waiting(task: dict) -> bool:
+            return int(task.get("blocked_by_count") or 0) > 0 or bool(str(task.get("waiting_for") or "").strip())
+
+        def _has_active_children(task_id: int) -> bool:
+            for child in children_by_parent.get(int(task_id), []):
+                if _is_active(child):
+                    return True
+            return False
+
+        def _add(task: dict, section: str, note: str):
+            tid = int(task["id"])
+            if tid in out_by_id:
+                current = out_by_id[tid]
+                cur_order = section_order.get(str(current.get("focus_section")), 99)
+                next_order = section_order.get(section, 99)
+                if next_order < cur_order:
+                    current["focus_section"] = section
+                    current["focus_note"] = note
+                elif note:
+                    existing_note = str(current.get("focus_note") or "")
+                    if note not in existing_note:
+                        current["focus_note"] = f"{existing_note} | {note}" if existing_note else note
+                return
+            row = dict(task)
+            row["focus_section"] = section
+            row["focus_note"] = note
+            out_by_id[tid] = row
+
+        project_rows = self.fetch_project_health(stalled_days=14)
+        next_action_ids = {
+            int(row["next_action_task_id"])
+            for row in project_rows
+            if row.get("next_action_task_id") is not None
+        }
+
+        for task in tasks:
+            if not _is_active(task):
+                continue
+            tid = int(task["id"])
+            due = _parse_iso_date(task.get("due_date"))
+            bucket = str(task.get("planned_bucket") or "inbox").strip().lower() or "inbox"
+            blocked_waiting = _is_blocked_or_waiting(task)
+            has_children = _has_active_children(tid)
+
+            is_due_now = bool(bucket == "today" or (due is not None and due <= today))
+            if is_due_now:
+                if blocked_waiting:
+                    if include_waiting:
+                        note = str(task.get("waiting_for") or "").strip() or "blocked by dependency"
+                        section = "Waiting/Blocked"
+                        _add(task, section, note)
+                    continue
+                if not has_children:
+                    section = "Overdue" if due is not None and due < today else "Today"
+                    note = f"bucket: {bucket}" if bucket == "today" and due is None else ""
+                    _add(task, section, note)
+
+            if tid in next_action_ids and not blocked_waiting:
+                _add(task, "Next action", "project next action")
+
+        for task in tasks:
+            if len(out_by_id) >= max_items:
+                break
+            if not _is_active(task):
+                continue
+            tid = int(task["id"])
+            if tid in out_by_id:
+                continue
+            if _has_active_children(tid):
+                continue
+            if _is_blocked_or_waiting(task):
+                continue
+            due = _parse_iso_date(task.get("due_date"))
+            if due is not None and due <= today:
+                continue
+            _add(task, "Ready next", "unblocked next step")
+
+        rows = list(out_by_id.values())
+        rows.sort(
+            key=lambda row: (
+                section_order.get(str(row.get("focus_section") or ""), 99),
+                _parse_iso_date(row.get("due_date")) or date.max,
+                int(row.get("priority") or 99),
+                str(row.get("description") or "").lower(),
+                int(row.get("id") or 0),
+            )
+        )
+        return rows[:max_items]
+
     def fetch_analytics_summary(self, trend_days: int = 14, tag_days: int = 30) -> dict:
         trend_window = max(3, int(trend_days or 14))
         tag_window = max(7, int(tag_days or 30))
+        tasks = self.fetch_tasks()
 
         cur = self.conn.cursor()
 
@@ -1339,11 +1903,12 @@ class Database:
         )
         top_tags = [{"tag": str(r["name"]), "count": int(r["c"] or 0)} for r in cur.fetchall()]
 
-        project_rows = self.fetch_project_health(stalled_days=14)
+        project_rows = analyze_projects(tasks, stalled_days=14, today=today)
         project_total = len(project_rows)
         project_stalled = sum(1 for r in project_rows if bool(r.get("stalled")))
         project_blocked = sum(1 for r in project_rows if bool(r.get("blocked")))
         project_no_next = sum(1 for r in project_rows if bool(r.get("no_next_action")))
+        workload = analyze_workload(tasks, today=today)
 
         return {
             "completed_today": int(completed_today),
@@ -1362,6 +1927,9 @@ class Database:
             "project_stalled": int(project_stalled),
             "project_blocked": int(project_blocked),
             "project_no_next": int(project_no_next),
+            "workload_busiest_days": workload.get("busiest_days") or [],
+            "workload_warnings": workload.get("warnings") or [],
+            "scheduling_hints": workload.get("suggestions") or [],
             "trend": trend,
             "top_tags": top_tags,
         }
@@ -1449,6 +2017,196 @@ class Database:
             (int(task_id),),
         )
         return [dict(r) for r in cur.fetchall()]
+
+    def fetch_dependents(self, task_id: int) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT td.task_id AS id, t.description, t.status, t.priority, t.due_date
+            FROM task_dependencies td
+            JOIN tasks t ON t.id = td.task_id
+            WHERE td.depends_on_task_id = ?
+            ORDER BY COALESCE(t.due_date, '9999-12-31') ASC, t.priority ASC, LOWER(t.description), t.id;
+            """,
+            (int(task_id),),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def fetch_task_relationships(self, task_id: int, limit: int = 12) -> dict:
+        tid = int(task_id)
+        tasks = self.fetch_tasks()
+        by_id: dict[int, dict] = {}
+        children_by_parent: dict[int, list[dict]] = {}
+        for task in tasks:
+            task_id_value = int(task["id"])
+            by_id[task_id_value] = task
+            parent_id = task.get("parent_id")
+            if parent_id is None:
+                continue
+            try:
+                children_by_parent.setdefault(int(parent_id), []).append(task)
+            except Exception:
+                continue
+
+        task = by_id.get(tid)
+        if not task:
+            return {}
+
+        max_items = max(1, int(limit or 12))
+
+        def _active(row: dict) -> bool:
+            return not str(row.get("archived_at") or "").strip()
+
+        def _open(row: dict) -> bool:
+            return _active(row) and str(row.get("status") or "") != "Done"
+
+        def _sort_key(row: dict):
+            due = _parse_iso_date(row.get("due_date")) or date.max
+            return (
+                due,
+                int(row.get("priority") or 99),
+                str(row.get("description") or "").lower(),
+                int(row.get("id") or 0),
+            )
+
+        def _copy_rows(rows: list[dict], *, add_shared_tags: set[str] | None = None) -> list[dict]:
+            out: list[dict] = []
+            for row in rows[:max_items]:
+                item = dict(row)
+                if add_shared_tags:
+                    shared = sorted(add_shared_tags.intersection({str(t).strip() for t in (row.get("tags") or []) if str(t).strip()}))
+                    item["shared_tags"] = shared
+                if str(item.get("waiting_for") or "").strip():
+                    updated = _parse_iso_datetime(item.get("last_update"))
+                    if updated is not None:
+                        item["waiting_age_days"] = max(0, (date.today() - updated.date()).days)
+                out.append(item)
+            return out
+
+        parent = None
+        parent_id = task.get("parent_id")
+        if parent_id is not None:
+            try:
+                parent = by_id.get(int(parent_id))
+            except Exception:
+                parent = None
+
+        ancestors: list[dict] = []
+        probe = parent
+        seen = set()
+        while probe and int(probe["id"]) not in seen:
+            ancestors.append(dict(probe))
+            seen.add(int(probe["id"]))
+            next_parent_id = probe.get("parent_id")
+            if next_parent_id is None:
+                break
+            probe = by_id.get(int(next_parent_id))
+        ancestors.reverse()
+
+        children = sorted([row for row in children_by_parent.get(tid, []) if _active(row)], key=_sort_key)
+        siblings = []
+        sibling_ids: set[int] = set()
+        if parent is not None:
+            siblings = [row for row in children_by_parent.get(int(parent["id"]), []) if int(row["id"]) != tid and _active(row)]
+            siblings.sort(key=_sort_key)
+            sibling_ids = {int(row["id"]) for row in siblings}
+
+        dependency_ids = [int(x) for x in (task.get("dependencies") or []) if int(x) in by_id]
+        depends_on = [by_id[dep_id] for dep_id in dependency_ids if _active(by_id[dep_id])]
+        depends_on.sort(key=_sort_key)
+
+        dependents = [
+            row
+            for row in tasks
+            if int(row.get("id") or 0) != tid and tid in [int(x) for x in (row.get("dependencies") or [])]
+            and _active(row)
+        ]
+        dependents.sort(key=_sort_key)
+
+        task_tags = {str(tag).strip() for tag in (task.get("tags") or []) if str(tag).strip()}
+        same_tags = [
+            row
+            for row in tasks
+            if int(row.get("id") or 0) != tid
+            and _active(row)
+            and task_tags.intersection({str(tag).strip() for tag in (row.get("tags") or []) if str(tag).strip()})
+        ]
+        same_tags.sort(key=lambda row: (-len(task_tags.intersection(set(row.get("tags") or []))),) + _sort_key(row))
+
+        waiting_for = str(task.get("waiting_for") or "").strip().lower()
+        same_waiting = []
+        if waiting_for:
+            same_waiting = [
+                row
+                for row in tasks
+                if int(row.get("id") or 0) != tid
+                and _active(row)
+                and str(row.get("waiting_for") or "").strip().lower() == waiting_for
+            ]
+            same_waiting.sort(key=_sort_key)
+
+        def _root_id(row: dict) -> int:
+            seen_ids = set()
+            current = row
+            while current:
+                current_id = int(current.get("id") or 0)
+                if current_id in seen_ids:
+                    break
+                seen_ids.add(current_id)
+                pid = current.get("parent_id")
+                if pid is None:
+                    return current_id
+                current = by_id.get(int(pid))
+            return int(row.get("id") or 0)
+
+        root_id = _root_id(task)
+        lineage_ids = {int(row["id"]) for row in ancestors}
+        direct_child_ids = {int(row["id"]) for row in children}
+        same_project = [
+            row
+            for row in tasks
+            if int(row.get("id") or 0) != tid
+            and _active(row)
+            and _root_id(row) == root_id
+            and int(row.get("id") or 0) not in lineage_ids
+            and int(row.get("id") or 0) not in direct_child_ids
+            and int(row.get("id") or 0) not in sibling_ids
+        ]
+        same_project.sort(key=_sort_key)
+
+        due_day_load = None
+        due = _parse_iso_date(task.get("due_date"))
+        if due is not None:
+            same_day = [row for row in tasks if _open(row) and _parse_iso_date(row.get("due_date")) == due]
+            if same_day:
+                high_priority = sum(1 for row in same_day if int(row.get("priority") or 99) <= 2)
+                warning = ""
+                if len(same_day) >= 5:
+                    warning = f"{len(same_day)} active tasks are due that day."
+                elif high_priority >= 3:
+                    warning = f"{high_priority} high-priority tasks are clustered on that day."
+                due_day_load = {
+                    "date": due.isoformat(),
+                    "task_count": len(same_day),
+                    "high_priority_count": int(high_priority),
+                    "warning": warning,
+                }
+
+        project_summary = self.project_health_for_task(tid, stalled_days=14)
+        return {
+            "task": dict(task),
+            "parent": dict(parent) if parent else None,
+            "ancestors": ancestors,
+            "children": _copy_rows(children),
+            "siblings": _copy_rows(siblings),
+            "depends_on": _copy_rows(depends_on),
+            "dependents": _copy_rows(dependents),
+            "same_tags": _copy_rows(same_tags, add_shared_tags=task_tags),
+            "same_waiting_for": _copy_rows(same_waiting),
+            "same_project": _copy_rows(same_project),
+            "project_summary": project_summary,
+            "due_day_load": due_day_load,
+        }
 
     def set_task_dependencies(self, task_id: int, depends_on_ids: list[int]):
         ids = []

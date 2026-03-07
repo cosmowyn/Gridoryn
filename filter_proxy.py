@@ -56,13 +56,30 @@ class TaskFilterProxyModel(QSortFilterProxyModel):
         self._blocked_only = False
         self._waiting_only = False
 
+    def _refresh_filter(self):
+        """Refresh row filtering without using deprecated Qt APIs when available."""
+        begin = getattr(self, "beginFilterChange", None)
+        end = getattr(self, "endFilterChange", None)
+        if callable(begin) and callable(end):
+            begin()
+            try:
+                direction = getattr(QSortFilterProxyModel, "Direction", None)
+                if direction is not None and hasattr(direction, "Rows"):
+                    end(direction.Rows)
+                else:
+                    end()
+            except TypeError:
+                end()
+            return
+        self.invalidateFilter()
+
     # ---------- Public setters ----------
     def set_search_text(self, text: str):
         t = (text or "").strip()
         if t != self._search_text:
             self._search_text = t
             self._parsed = parse_search_query(t)
-            self.invalidateFilter()
+            self._refresh_filter()
             self.invalidate()
 
     def set_status_allowed(self, statuses: Optional[Set[str]]):
@@ -71,7 +88,7 @@ class TaskFilterProxyModel(QSortFilterProxyModel):
             statuses = None
         if statuses != self._status_allowed:
             self._status_allowed = statuses
-            self.invalidateFilter()
+            self._refresh_filter()
 
     def set_priority_range(self, pmin: Optional[int], pmax: Optional[int]):
         if pmin is not None:
@@ -80,48 +97,48 @@ class TaskFilterProxyModel(QSortFilterProxyModel):
             pmax = int(pmax)
         if (pmin, pmax) != (self._priority_min, self._priority_max):
             self._priority_min, self._priority_max = pmin, pmax
-            self.invalidateFilter()
+            self._refresh_filter()
 
     def set_due_range(self, dfrom: Optional[date], dto: Optional[date]):
         if (dfrom, dto) != (self._due_from, self._due_to):
             self._due_from, self._due_to = dfrom, dto
-            self.invalidateFilter()
+            self._refresh_filter()
 
     def set_hide_done(self, hide: bool):
         hide = bool(hide)
         if hide != self._hide_done:
             self._hide_done = hide
-            self.invalidateFilter()
+            self._refresh_filter()
 
     def set_overdue_only(self, overdue: bool):
         overdue = bool(overdue)
         if overdue != self._overdue_only:
             self._overdue_only = overdue
-            self.invalidateFilter()
+            self._refresh_filter()
 
     def set_show_children_of_matches(self, enabled: bool):
         enabled = bool(enabled)
         if enabled != self._show_children_of_matches:
             self._show_children_of_matches = enabled
-            self.invalidateFilter()
+            self._refresh_filter()
 
     def set_tag_filter(self, tags: set[str] | None):
         next_tags = {str(t).strip().lower() for t in (tags or set()) if str(t).strip()}
         if next_tags != self._tag_filter:
             self._tag_filter = next_tags
-            self.invalidateFilter()
+            self._refresh_filter()
 
     def set_blocked_only(self, enabled: bool):
         v = bool(enabled)
         if v != self._blocked_only:
             self._blocked_only = v
-            self.invalidateFilter()
+            self._refresh_filter()
 
     def set_waiting_only(self, enabled: bool):
         v = bool(enabled)
         if v != self._waiting_only:
             self._waiting_only = v
-            self.invalidateFilter()
+            self._refresh_filter()
 
     def set_perspective(self, perspective: str):
         p = str(perspective or "all").strip().lower()
@@ -129,7 +146,7 @@ class TaskFilterProxyModel(QSortFilterProxyModel):
             p = "all"
         if p != self._perspective:
             self._perspective = p
-            self.invalidateFilter()
+            self._refresh_filter()
 
     def perspective(self) -> str:
         return self._perspective
@@ -262,6 +279,14 @@ class TaskFilterProxyModel(QSortFilterProxyModel):
             if prio != int(self._parsed.priority):
                 return False
 
+        bucket = str(task.get("planned_bucket") or "").strip().lower() or "inbox"
+        if self._parsed.bucket:
+            if bucket != str(self._parsed.bucket).strip().lower():
+                return False
+
+        if self._parsed.due_none and due is not None:
+            return False
+
         if self._parsed.tags:
             task_tags = {str(t).strip().lower() for t in (task.get("tags") or []) if str(t).strip()}
             if not {t.lower() for t in self._parsed.tags}.issubset(task_tags):
@@ -278,6 +303,11 @@ class TaskFilterProxyModel(QSortFilterProxyModel):
 
         if self._parsed.waiting_only or self._waiting_only:
             if not str(task.get("waiting_for") or "").strip():
+                return False
+
+        if self._parsed.recurring_only:
+            rec = task.get("recurrence") or {}
+            if not str(rec.get("frequency") or "").strip():
                 return False
 
         if self._parsed.due_ops:
@@ -354,6 +384,7 @@ class TaskFilterProxyModel(QSortFilterProxyModel):
         parts.append(str(task.get("last_update") or ""))
         parts.append(str(task.get("notes") or ""))
         parts.append(str(task.get("waiting_for") or ""))
+        parts.append(str(task.get("planned_bucket") or ""))
 
         # Custom values
         custom = task.get("custom") or {}
@@ -364,6 +395,10 @@ class TaskFilterProxyModel(QSortFilterProxyModel):
 
         for tag in task.get("tags") or []:
             parts.append(str(tag))
+
+        rec = task.get("recurrence") or {}
+        if isinstance(rec, dict):
+            parts.append(str(rec.get("frequency") or ""))
 
         hay = " ".join(parts).lower()
         return q in hay

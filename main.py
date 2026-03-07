@@ -1,5 +1,6 @@
 import sys
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 # --- PyInstaller splash: close it ASAP (safe when not built with --splash) ---
 try:
@@ -15,18 +16,29 @@ from PySide6.QtWidgets import (
     QTreeView, QPushButton, QToolBar, QMenu, QMessageBox, QAbstractItemView,
     QLineEdit, QDockWidget, QLabel, QToolButton, QComboBox, QInputDialog,
     QFileDialog, QListWidget, QListWidgetItem, QUndoView, QScrollArea,
+    QSystemTrayIcon,
     QGridLayout, QGroupBox, QSizePolicy, QLayout
 )
 
-from app_paths import app_db_path
-from db import Database
+from app_paths import app_db_path, app_data_dir
+from app_metadata import APP_NAME, APP_ORGANIZATION, APP_VERSION, app_display_version
+from crash_logging import install_exception_hooks, log_exception
+from db import Database, DatabaseMigrationError
 from model import TaskTreeModel, STATUSES
 from delegates import install_delegates
 from settings_ui import SettingsDialog
 from columns_ui import AddColumnDialog, RemoveColumnDialog
 from filter_proxy import TaskFilterProxyModel
 from filters_ui import FilterPanel
-from query_parsing import parse_quick_add
+from capture_parsing import (
+    BulkPostponeOverdueIntent,
+    CreateRecurringTaskIntent,
+    RescheduleSelectedIntent,
+    ShowSearchIntent,
+    TaskCaptureIntent,
+    parse_capture_input,
+)
+from capture_actions import CaptureExecutionResult, execute_capture_intent
 from details_panel import TaskDetailsPanel
 from auto_backup import create_versioned_backup, rotate_backups
 from help_ui import HelpDialog
@@ -35,9 +47,26 @@ from reminders_ui import ReminderBatchDialog
 from archive_ui import ArchiveBrowserDialog
 from command_palette import CommandPaletteDialog, PaletteCommand
 from review_ui import ReviewWorkflowPanel
+from focus_ui import FocusPanel
+from welcome_ui import WelcomeDialog
+from demo_data import create_demo_workspace, populate_demo_database
 from template_params import collect_template_placeholders, apply_template_values
 from template_vars_ui import TemplateVariablesDialog
 from analytics_ui import AnalyticsPanel
+from diagnostics_ui import DiagnosticsDialog
+from quick_capture_ui import QuickCaptureDialog
+from relationships_ui import RelationshipsPanel
+from snapshot_history_ui import SnapshotHistoryDialog
+from workspace_profiles import WorkspaceProfileManager
+from workspace_ui import WorkspaceManagerDialog
+from workflow_assist import (
+    acknowledge_review_items,
+    clear_review_acknowledgements,
+    filter_acknowledged_review_data,
+    review_ack_state_from_setting,
+    review_ack_state_to_setting,
+    should_show_onboarding,
+)
 
 from backup_io import export_backup_ui, import_backup_ui
 from theme_io import export_themes_ui, import_themes_ui
@@ -49,18 +78,34 @@ class MainWindow(QMainWindow):
     REMINDER_MODE_MUTE_ALL = "mute_all"
     REMINDER_MODE_PRIORITY1_ONLY = "priority1_only"
 
-    def __init__(self):
+    def __init__(self, workspace_manager: WorkspaceProfileManager | None = None, workspace_id: str | None = None):
         super().__init__()
+        self.workspace_manager = workspace_manager or WorkspaceProfileManager()
+        self.workspace = (
+            self.workspace_manager.workspace_by_id(str(workspace_id or "").strip())
+            or self.workspace_manager.current_workspace()
+        )
+        self.workspace_id = str(self.workspace.get("id") or "default")
+        self.workspace_name = str(self.workspace.get("name") or self.workspace_id or "Default")
+        self.workspace_db_path = str(self.workspace.get("db_path") or app_db_path())
+        self.workspace_manager.ensure_workspace_state(self.workspace_id)
+        self._workspace_switching = False
+        self._replacement_window: MainWindow | None = None
 
-        self.setWindowTitle("CustomTaskManager")
-
-        self.db = Database(app_db_path())
+        self.db = Database(self.workspace_db_path)
+        self._update_window_title()
 
         # Source model (full tree)
         self.model = TaskTreeModel(self.db)
         self.undo_stack = self.model.undo_stack
         self._tooltips_enabled = True
         self._help_dialog: HelpDialog | None = None
+        self._diagnostics_dialog: DiagnosticsDialog | None = None
+        self._quick_capture_dialog: QuickCaptureDialog | None = None
+        self._workspace_dialog: WorkspaceManagerDialog | None = None
+        self._snapshot_dialog: SnapshotHistoryDialog | None = None
+        self._tray_icon: QSystemTrayIcon | None = None
+        self._global_capture_hotkey = None
         self._reminder_mode = str(
             self.model.settings.value("ui/reminder_mode", self.REMINDER_MODE_NORMAL)
         ).strip() or self.REMINDER_MODE_NORMAL
@@ -104,6 +149,8 @@ class MainWindow(QMainWindow):
         self.view.setSelectionMode(QTreeView.SelectionMode.ExtendedSelection)
         self.view.setAlternatingRowColors(True)
         self.view.setUniformRowHeights(False)
+        self.view.setAllColumnsShowFocus(True)
+        self.view.setTabKeyNavigation(True)
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.view.setHorizontalScrollMode(QTreeView.ScrollMode.ScrollPerPixel)
@@ -136,7 +183,7 @@ class MainWindow(QMainWindow):
         # --- Quick add bar
         self.quick_add = QLineEdit()
         self.quick_add.setObjectName("QuickAddBar")
-        self.quick_add.setPlaceholderText("Quick add... e.g. Call supplier next week p1 (Ctrl+L)")
+        self.quick_add.setPlaceholderText("Quick add... e.g. Call supplier @work next week !p1 /today (Ctrl+L)")
         self.quick_add.returnPressed.connect(self._quick_add_submit)
 
         self.view_mode = QComboBox()
@@ -276,13 +323,18 @@ class MainWindow(QMainWindow):
         # Advanced filter panel (dock)
         self._init_filter_dock()
         self._init_details_dock()
+        self._init_relationships_dock()
         self._init_undo_history_dock()
+        self._init_focus_dock()
         self._init_calendar_dock()
         self._init_review_dock()
         self._init_analytics_dock()
 
         self._build_menus_and_toolbar()
+        self._init_quick_capture_tools()
+        self._init_status_bar()
         self._apply_widget_tooltips()
+        self._apply_accessibility_metadata()
         self._restore_ui_settings()
         tooltips_enabled = self.model.settings.value("ui/tooltips_enabled", True, type=bool)
         self._set_tooltips_enabled(bool(tooltips_enabled), show_message=False)
@@ -292,11 +344,19 @@ class MainWindow(QMainWindow):
         self.model.modelReset.connect(self._refresh_calendar_list)
         self.model.modelReset.connect(self._refresh_calendar_markers)
         self.model.modelReset.connect(self._refresh_review_panel)
+        self.model.modelReset.connect(self._refresh_focus_panel)
         self.model.modelReset.connect(self._refresh_analytics_panel)
         self.model.modelReset.connect(self._refresh_details_dock)
+        self.model.modelReset.connect(self._refresh_relationships_panel)
         self.model.dataChanged.connect(lambda *_: self._refresh_calendar_markers())
+        self.model.dataChanged.connect(lambda *_: self._refresh_focus_panel())
+        self.model.dataChanged.connect(lambda *_: self._refresh_relationships_panel())
         self.model.rowsInserted.connect(lambda *_: self._refresh_calendar_markers())
+        self.model.rowsInserted.connect(lambda *_: self._refresh_focus_panel())
+        self.model.rowsInserted.connect(lambda *_: self._refresh_relationships_panel())
         self.model.rowsRemoved.connect(lambda *_: self._refresh_calendar_markers())
+        self.model.rowsRemoved.connect(lambda *_: self._refresh_focus_panel())
+        self.model.rowsRemoved.connect(lambda *_: self._refresh_relationships_panel())
         self.undo_stack.indexChanged.connect(self._on_undo_stack_index_changed)
 
         # Timer to refresh due-date gradient + foreground contrast
@@ -329,6 +389,7 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(0, self._update_row_action_buttons)
         QTimer.singleShot(0, self._refresh_details_dock)
+        QTimer.singleShot(0, self._maybe_show_onboarding)
 
     # ---------- Splash (close again once UI shows) ----------
     def showEvent(self, event):
@@ -503,39 +564,257 @@ class MainWindow(QMainWindow):
         if not self.model.add_task(parent_id=None):
             self._pending_edit_on_insert = False
 
+    def _capture_default_bucket(self, source: str = "quick_add") -> str:
+        source_key = str(source or "quick_add").strip().lower()
+        if source_key in {"global", "tray", "capture_dialog"}:
+            return "inbox"
+        perspective = str(self.view_mode.currentData() or "all")
+        return perspective if perspective in {"inbox", "today", "upcoming", "someday"} else "inbox"
+
+    def _submit_capture_text(self, raw: str, *, default_bucket: str) -> CaptureExecutionResult:
+        try:
+            intent = parse_capture_input(raw)
+            return execute_capture_intent(intent, self, default_bucket=default_bucket)
+        except Exception as e:
+            log_exception(e, context="quick-capture", db_path=self.db.path)
+            return CaptureExecutionResult(False, "Capture failed unexpectedly. Check Diagnostics/Logs for details.")
+
     def _quick_add_submit(self):
         raw = self.quick_add.text().strip()
         if not raw:
             return
-        parsed = parse_quick_add(raw)
-        if not parsed.description:
-            parsed.description = raw
+        result = self._submit_capture_text(raw, default_bucket=self._capture_default_bucket("quick_add"))
+        if result.success:
+            self.quick_add.clear()
+        if result.message:
+            self.statusBar().showMessage(result.message, 4000)
+        self.quick_add.setFocus()
 
-        perspective = str(self.view_mode.currentData() or "all")
-        bucket = perspective if perspective in {"inbox", "today", "upcoming", "someday"} else "inbox"
+    def _resolve_parent_hint_task_id(self, hint: str) -> int | None:
+        raw = str(hint or "").strip()
+        if not raw:
+            return None
+        lowered = raw.lower()
+        if lowered in {"parent", "selected", "current"}:
+            return self._selected_task_id()
+        try:
+            task_id = int(raw)
+        except Exception:
+            task_id = None
+        if task_id is not None and self.model.node_for_id(int(task_id)):
+            return int(task_id)
 
+        exact_matches: list[int] = []
+        contains_matches: list[int] = []
+        for node in self.model.iter_nodes_preorder():
+            if not node.task or str(node.task.get("archived_at") or "").strip():
+                continue
+            desc = str(node.task.get("description") or "").strip()
+            if not desc:
+                continue
+            task_id = int(node.task["id"])
+            desc_lower = desc.lower()
+            if desc_lower == lowered:
+                exact_matches.append(task_id)
+            elif lowered in desc_lower:
+                contains_matches.append(task_id)
+        if exact_matches:
+            return int(exact_matches[0])
+        if contains_matches:
+            return int(contains_matches[0])
+        return None
+
+    def _resolve_capture_parent_id(self, parsed) -> tuple[int | None, list[str]]:
+        notes: list[str] = []
+        parent_id = None
+        if str(parsed.parent_hint or "").strip():
+            parent_id = self._resolve_parent_hint_task_id(str(parsed.parent_hint))
+            if parent_id is None:
+                notes.append(f"Parent '{parsed.parent_hint}' was not found; captured as top-level.")
+        elif bool(parsed.create_as_child):
+            parent_id = self._selected_task_id()
+            if parent_id is None:
+                notes.append("No current row selected; captured as top-level.")
+        return parent_id, notes
+
+    def _set_due_date_for_task_ids(self, task_ids: list[int], due_text: str | None, macro_text: str) -> int:
+        due_col = self._column_index_for_key("due_date")
+        if due_col is None:
+            return 0
+        changed = 0
+        self.model.undo_stack.beginMacro(str(macro_text or "Set due date"))
+        try:
+            for tid in {int(x) for x in task_ids if int(x) > 0}:
+                src = self._source_index_for_task_id(int(tid), due_col)
+                if not src.isValid():
+                    continue
+                self.model.setData(src, due_text, Qt.ItemDataRole.EditRole)
+                changed += 1
+        finally:
+            self.model.undo_stack.endMacro()
+        return changed
+
+    def _shift_due_dates_for_task_ids(self, task_ids: list[int], delta_days: int, macro_text: str) -> int:
+        changed = 0
+        due_col = self._column_index_for_key("due_date")
+        if due_col is None:
+            return 0
+        self.model.undo_stack.beginMacro(str(macro_text or "Shift due date"))
+        try:
+            for tid in {int(x) for x in task_ids if int(x) > 0}:
+                node = self.model.node_for_id(int(tid))
+                if not node or not node.task:
+                    continue
+                due = str(node.task.get("due_date") or "").strip()
+                if not due:
+                    continue
+                try:
+                    shifted = datetime.strptime(due[:10], "%Y-%m-%d").date() + timedelta(days=int(delta_days))
+                except Exception:
+                    continue
+                src = self._source_index_for_task_id(int(tid), due_col)
+                if not src.isValid():
+                    continue
+                self.model.setData(src, shifted.isoformat(), Qt.ItemDataRole.EditRole)
+                changed += 1
+        finally:
+            self.model.undo_stack.endMacro()
+        return changed
+
+    def _show_main_window(self):
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def handle_task_capture(self, intent: TaskCaptureIntent, default_bucket: str) -> CaptureExecutionResult:
+        parsed = intent.parsed
+        description = str(parsed.description or "").strip()
+        if not description:
+            return CaptureExecutionResult(False, "Nothing to capture.")
+
+        parent_id, notes = self._resolve_capture_parent_id(parsed)
+        bucket = str(parsed.bucket or default_bucket or "inbox").strip().lower() or "inbox"
         ok = self.model.add_task_with_values(
-            description=parsed.description,
+            description=description,
             due_date=parsed.due_date,
             priority=parsed.priority,
-            parent_id=None,
+            parent_id=parent_id,
             planned_bucket=bucket,
+            tags=list(parsed.tags or []),
         )
-        if ok:
+        if not ok:
+            return CaptureExecutionResult(False, "Capture failed. Nesting limit reached for the target parent.")
+
+        new_id = self.model.last_added_task_id()
+        if self.isVisible() and new_id is not None:
+            before = self._selected_task_id()
+            self._focus_task_by_id(int(new_id))
+            after = self._selected_task_id()
+            if after == int(new_id) and before != after:
+                self._refresh_details_dock()
+            elif after != int(new_id):
+                notes.append("Created task is hidden by the current view or filter.")
+        message = f"Captured to {bucket}."
+        if notes or parsed.parse_warnings:
+            message = f"{message} {' '.join(notes + list(parsed.parse_warnings))}".strip()
+        return CaptureExecutionResult(True, message)
+
+    def handle_reschedule_selected(self, intent: RescheduleSelectedIntent) -> CaptureExecutionResult:
+        task_id = self._selected_task_id()
+        if task_id is None:
+            return CaptureExecutionResult(False, "Select a task before using move-this planning commands.")
+        changed = self._set_due_date_for_task_ids([int(task_id)], intent.due_date, "Move selected task")
+        if changed <= 0:
+            return CaptureExecutionResult(False, "Selected task could not be rescheduled.")
+        self._focus_task_by_id(int(task_id))
+        return CaptureExecutionResult(True, f"Moved selected task to {intent.due_date}.")
+
+    def handle_bulk_postpone_overdue(self, intent: BulkPostponeOverdueIntent) -> CaptureExecutionResult:
+        tag_filter = str(intent.tag or "").strip().lower() or None
+        today = date.today()
+        matches: list[int] = []
+        for task in self.db.fetch_tasks():
+            if str(task.get("archived_at") or "").strip():
+                continue
+            if str(task.get("status") or "") == "Done":
+                continue
+            due = str(task.get("due_date") or "").strip()
+            if not due:
+                continue
+            try:
+                due_date = datetime.strptime(due[:10], "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if due_date >= today:
+                continue
+            if tag_filter:
+                tags = {str(t).strip().lower() for t in (task.get("tags") or []) if str(t).strip()}
+                if tag_filter not in tags:
+                    continue
+            matches.append(int(task["id"]))
+
+        if not matches:
+            label = f"tag '{tag_filter}' " if tag_filter else ""
+            return CaptureExecutionResult(False, f"No overdue {label}tasks matched that command.")
+
+        label = f"tag '{tag_filter}' " if tag_filter else ""
+        answer = QMessageBox.question(
+            self,
+            "Confirm postpone",
+            f"Postpone {len(matches)} overdue {label}task(s) by {int(intent.days)} day(s)?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return CaptureExecutionResult(False, "Bulk postpone cancelled.")
+
+        changed = self._shift_due_dates_for_task_ids(matches, int(intent.days), "Postpone overdue tasks")
+        if changed <= 0:
+            return CaptureExecutionResult(False, "No due dates were changed.")
+        self._refresh_calendar_list()
+        return CaptureExecutionResult(True, f"Postponed {changed} overdue task(s) by {int(intent.days)} day(s).")
+
+    def handle_show_search(self, intent: ShowSearchIntent) -> CaptureExecutionResult:
+        if intent.perspective:
+            self._set_perspective_by_key(str(intent.perspective))
+        self.search.setText(str(intent.query_text or ""))
+        self._show_main_window()
+        self.search.setFocus()
+        return CaptureExecutionResult(True, f"Showing results for {intent.query_text}.")
+
+    def handle_create_recurring(self, intent: CreateRecurringTaskIntent, default_bucket: str) -> CaptureExecutionResult:
+        parsed = intent.parsed
+        description = str(parsed.description or "").strip()
+        if not description:
+            return CaptureExecutionResult(False, "Recurring capture requires a task description.")
+        parent_id, notes = self._resolve_capture_parent_id(parsed)
+        bucket = str(parsed.bucket or default_bucket or "inbox").strip().lower() or "inbox"
+        self.model.undo_stack.beginMacro("Create recurring task")
+        try:
+            ok = self.model.add_task_with_values(
+                description=description,
+                due_date=intent.due_date,
+                priority=parsed.priority,
+                parent_id=parent_id,
+                planned_bucket=bucket,
+                tags=list(parsed.tags or []),
+                reminder_at=intent.reminder_at,
+            )
+            if not ok:
+                return CaptureExecutionResult(False, "Recurring capture failed. Nesting limit reached for the target parent.")
             new_id = self.model.last_added_task_id()
-            self.quick_add.clear()
-            if new_id is not None:
-                before = self._selected_task_id()
-                self._focus_task_by_id(int(new_id))
-                after = self._selected_task_id()
-                if after != int(new_id):
-                    self.statusBar().showMessage(
-                        "Task created, but hidden by current view/filter.",
-                        4000,
-                    )
-                elif before != after:
-                    self._refresh_details_dock()
-        self.quick_add.setFocus()
+            if new_id is None:
+                return CaptureExecutionResult(False, "Recurring capture failed.")
+            self.model.set_task_recurrence(int(new_id), intent.frequency, bool(intent.create_next_on_done))
+        finally:
+            self.model.undo_stack.endMacro()
+        if self.isVisible():
+            self._focus_task_by_id(int(new_id))
+        message = f"Created recurring {intent.frequency} task."
+        if notes or parsed.parse_warnings:
+            message = f"{message} {' '.join(notes + list(parsed.parse_warnings))}".strip()
+        return CaptureExecutionResult(True, message)
 
     def _delete_sibling_of_selected(self):
         pidx = self._selected_proxy_index()
@@ -608,6 +887,30 @@ class MainWindow(QMainWindow):
             lambda vis: self._toggle_details_act.setChecked(bool(vis)) if hasattr(self, "_toggle_details_act") else None
         )
 
+    def _init_relationships_dock(self):
+        self.relationships_panel = RelationshipsPanel(self)
+        self.relationships_panel.focusTaskRequested.connect(self._focus_task_by_id)
+        self.relationships_panel.closeRequested.connect(lambda: self.relationships_dock.hide())
+
+        self.relationships_dock = QDockWidget("Relationships", self)
+        self.relationships_dock.setObjectName("RelationshipsDock")
+        self.relationships_dock.setWidget(
+            self._wrap_dock_content_scrollable(self.relationships_panel, "RelationshipsDockScroll")
+        )
+        self.relationships_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.relationships_dock)
+        self.relationships_dock.hide()
+        self.relationships_dock.visibilityChanged.connect(
+            lambda vis: self._toggle_relationships_act.setChecked(bool(vis))
+            if hasattr(self, "_toggle_relationships_act")
+            else None
+        )
+        self.relationships_dock.visibilityChanged.connect(
+            lambda vis: self._refresh_relationships_panel() if vis else None
+        )
+
     def _init_undo_history_dock(self):
         self.undo_view = QUndoView(self.undo_stack, self)
         self.undo_view.setObjectName("UndoHistoryView")
@@ -625,6 +928,24 @@ class MainWindow(QMainWindow):
             else None
         )
 
+    def _init_focus_dock(self):
+        self.focus_panel = FocusPanel(self)
+        self.focus_panel.refreshRequested.connect(self._refresh_focus_panel)
+        self.focus_panel.focusTaskRequested.connect(self._focus_panel_focus_task)
+        self.focus_panel.openDetailsRequested.connect(self._focus_panel_open_details)
+        self.focus_panel.closeRequested.connect(lambda: self.focus_dock.hide())
+
+        self.focus_dock = QDockWidget("Focus Mode", self)
+        self.focus_dock.setObjectName("FocusDock")
+        self.focus_dock.setWidget(self._wrap_dock_content_scrollable(self.focus_panel, "FocusDockScroll"))
+        self.focus_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.focus_dock)
+        self.focus_dock.hide()
+        self.focus_dock.visibilityChanged.connect(
+            lambda vis: self._toggle_focus_act.setChecked(bool(vis)) if hasattr(self, "_toggle_focus_act") else None
+        )
+        self.focus_dock.visibilityChanged.connect(lambda vis: self._refresh_focus_panel() if vis else None)
+
     def _init_review_dock(self):
         self.review_panel = ReviewWorkflowPanel(self)
         self.review_panel.refreshRequested.connect(self._refresh_review_panel)
@@ -632,6 +953,9 @@ class MainWindow(QMainWindow):
         self.review_panel.markDoneRequested.connect(self._review_mark_done)
         self.review_panel.archiveRequested.connect(self._review_archive)
         self.review_panel.restoreRequested.connect(self._review_restore)
+        self.review_panel.acknowledgeRequested.connect(self._review_acknowledge)
+        self.review_panel.clearAcknowledgedRequested.connect(self._review_clear_acknowledged)
+        self.review_panel.useCategoryRequested.connect(self._review_use_category)
 
         self.review_dock = QDockWidget("Review Workflow", self)
         self.review_dock.setObjectName("ReviewDock")
@@ -724,6 +1048,16 @@ class MainWindow(QMainWindow):
             return
         details = self.model.task_details(int(tid))
         self.details_panel.set_task_details(details)
+
+    def _refresh_relationships_panel(self):
+        if not hasattr(self, "relationships_panel"):
+            return
+        tid = self._selected_task_id()
+        if tid is None:
+            self.relationships_panel.set_relationships(None)
+            return
+        data = self.model.task_relationships(int(tid), limit=10)
+        self.relationships_panel.set_relationships(data)
 
     def _save_details_from_panel(self):
         tid = self.details_panel.task_id()
@@ -976,7 +1310,15 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Review refresh failed", str(e))
             return
-        self.review_panel.set_review_data(data)
+        filtered, hidden_counts = filter_acknowledged_review_data(data, self._review_ack_state())
+        self.review_panel.set_review_data(filtered, hidden_counts=hidden_counts)
+
+    def _review_ack_state(self) -> dict[str, set[int]]:
+        raw = self.model.settings.value("review/acknowledged", "")
+        return review_ack_state_from_setting(raw)
+
+    def _save_review_ack_state(self, state: dict[str, set[int]]):
+        self.model.settings.setValue("review/acknowledged", review_ack_state_to_setting(state))
 
     def _review_focus_task(self, task_id: int):
         tid = int(task_id)
@@ -1019,6 +1361,103 @@ class MainWindow(QMainWindow):
             return
         self._restore_from_archive_ids(ids)
         self._refresh_review_panel()
+
+    def _review_acknowledge(self, category: str, task_ids: list[int]):
+        ids = [int(x) for x in (task_ids or []) if int(x) > 0]
+        if not ids:
+            return
+        state = acknowledge_review_items(self._review_ack_state(), category, ids)
+        self._save_review_ack_state(state)
+        self._refresh_review_panel()
+        self.statusBar().showMessage(f"Marked {len(ids)} review item(s) as handled.", 2500)
+
+    def _review_clear_acknowledged(self, category: str):
+        state = clear_review_acknowledgements(self._review_ack_state(), category=category)
+        self._save_review_ack_state(state)
+        self._refresh_review_panel()
+        self.statusBar().showMessage("Cleared handled state for current review category.", 2500)
+
+    def _review_use_category(self, category: str):
+        key = str(category or "").strip()
+        if not key:
+            return
+        state = self._capture_filter_state()
+        state["search_text"] = ""
+        panel_state = state["filter_panel"] or {}
+        panel_state.update(
+            {
+                "hide_done": True,
+                "overdue_only": False,
+                "blocked_only": False,
+                "waiting_only": False,
+            }
+        )
+        perspective = "all"
+        search = ""
+
+        if key == "overdue":
+            panel_state["overdue_only"] = True
+        elif key == "inbox_unprocessed":
+            perspective = "inbox"
+        elif key == "waiting_old":
+            panel_state["waiting_only"] = True
+        elif key in {"recent_done_archived", "archive_roots"}:
+            perspective = "completed"
+            panel_state["hide_done"] = False
+        elif key == "no_due":
+            search = "due:none"
+        elif key == "blocked_projects":
+            search = "is:blocked has:children"
+        elif key == "projects_no_next":
+            search = "has:children"
+        elif key == "recurring_attention":
+            search = "is:recurring"
+
+        state["filter_panel"] = panel_state
+        state["perspective"] = perspective
+        state["search_text"] = search
+        self._apply_filter_state(state)
+        self.statusBar().showMessage("Applied best-effort main view for the current review category.", 3000)
+
+    def _focus_current_summary(self) -> str:
+        tid = self._selected_task_id()
+        if tid is None:
+            return "Current selection: none"
+        details = self.model.task_details(int(tid)) or {}
+        desc = str(details.get("description") or "").strip() or "(untitled task)"
+        status = str(details.get("status") or "")
+        priority = str(details.get("priority") or "")
+        bucket = str(details.get("planned_bucket") or "")
+        return f"Current selection: [P{priority}] {desc} | {status} | bucket: {bucket}"
+
+    def _refresh_focus_panel(self, include_waiting: bool | None = None):
+        if not hasattr(self, "focus_panel"):
+            return
+        if hasattr(self, "focus_dock") and not self.focus_dock.isVisible():
+            return
+        if include_waiting is None:
+            include_waiting = bool(self.focus_panel.include_waiting.isChecked())
+        else:
+            self.focus_panel.include_waiting.blockSignals(True)
+            self.focus_panel.include_waiting.setChecked(bool(include_waiting))
+            self.focus_panel.include_waiting.blockSignals(False)
+        try:
+            rows = self.model.fetch_focus_data(include_waiting=bool(include_waiting), limit=40)
+        except Exception as e:
+            QMessageBox.warning(self, "Focus refresh failed", str(e))
+            return
+        self.focus_panel.set_focus_data(rows, self._focus_current_summary())
+
+    def _focus_panel_focus_task(self, task_id: int):
+        tid = int(task_id)
+        if tid <= 0:
+            return
+        self._focus_task_by_id(tid)
+        self._refresh_focus_panel()
+
+    def _focus_panel_open_details(self, task_id: int):
+        self._focus_panel_focus_task(task_id)
+        self._show_details_and_focus()
 
     def _refresh_analytics_panel(self, trend_days: int | None = None, tag_days: int | None = None):
         if not hasattr(self, "analytics_panel"):
@@ -1147,9 +1586,12 @@ class MainWindow(QMainWindow):
     def _run_auto_backup(self):
         try:
             keep = self.model.settings.value("backup/keep_count", 20, type=int)
-            create_versioned_backup(self.db, "auto")
-            rotate_backups(max_keep=int(keep or 20))
-        except Exception:
+            path = create_versioned_backup(self.db, "auto")
+            rotate_backups(max_keep=int(keep or 20), db_path=self.db.path)
+            self.model.settings.setValue("backup/last_snapshot_path", str(path))
+            self.model.settings.setValue("backup/last_snapshot_at", datetime.now().isoformat(timespec="seconds"))
+        except Exception as e:
+            log_exception(e, context="auto-backup", db_path=self.db.path)
             # Intentionally silent; backup failures should not interrupt app flow.
             return
 
@@ -1200,10 +1642,62 @@ class MainWindow(QMainWindow):
         try:
             path = create_versioned_backup(self.db, "manual")
             keep = self.model.settings.value("backup/keep_count", 20, type=int)
-            rotate_backups(max_keep=int(keep or 20))
+            rotate_backups(max_keep=int(keep or 20), db_path=self.db.path)
+            self.model.settings.setValue("backup/last_snapshot_path", str(path))
+            self.model.settings.setValue("backup/last_snapshot_at", datetime.now().isoformat(timespec="seconds"))
             QMessageBox.information(self, "Backup created", f"Snapshot saved to:\n{path}")
         except Exception as e:
+            log_exception(e, context="manual-backup", db_path=self.db.path)
             QMessageBox.warning(self, "Backup failed", str(e))
+
+    def _open_snapshot_history_dialog(self):
+        dlg = SnapshotHistoryDialog(self.db, self.workspace_manager, self)
+        if dlg.exec() == dlg.DialogCode.Accepted and dlg.switch_workspace_id():
+            self._switch_to_workspace(str(dlg.switch_workspace_id()))
+
+    def _open_workspace_manager(self):
+        dlg = WorkspaceManagerDialog(self.workspace_manager, self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        target_workspace_id = dlg.switch_workspace_id()
+        if target_workspace_id:
+            self._switch_to_workspace(str(target_workspace_id))
+
+    def _save_ui_settings(self):
+        s = self.model.settings
+        s.setValue("ui/geometry", self.saveGeometry())
+        s.setValue("ui/window_state", self.saveState())
+        s.setValue("ui/header_state", self.view.header().saveState())
+        s.setValue("ui/filters_dock_visible", self.filter_dock.isVisible())
+        s.setValue("ui/details_dock_visible", self.details_dock.isVisible())
+        s.setValue("ui/relationships_dock_visible", self.relationships_dock.isVisible())
+        s.setValue("ui/undo_dock_visible", self.undo_dock.isVisible())
+        s.setValue("ui/focus_dock_visible", self.focus_dock.isVisible())
+        s.setValue("ui/calendar_dock_visible", self.calendar_dock.isVisible())
+        s.setValue("ui/review_dock_visible", self.review_dock.isVisible())
+        s.setValue("ui/analytics_dock_visible", self.analytics_dock.isVisible())
+        s.setValue("ui/tooltips_enabled", self._tooltips_enabled)
+        s.setValue("ui/perspective", str(self.view_mode.currentData() or "all"))
+        s.setValue("ui/sort_mode", str(self.sort_mode.currentData() or "manual"))
+        s.setValue("ui/reminder_mode", self._reminder_mode)
+        self.workspace_manager.save_state_for(self.workspace_id)
+
+    def _switch_to_workspace(self, workspace_id: str):
+        target_id = str(workspace_id or "").strip()
+        if not target_id or target_id == self.workspace_id:
+            return
+        try:
+            self._save_ui_settings()
+            self._workspace_switching = True
+            self.workspace_manager.set_current_workspace(target_id, apply_state=True)
+            replacement = MainWindow(self.workspace_manager, target_id)
+            self._replacement_window = replacement
+            replacement.show()
+            self.close()
+        except Exception as e:
+            self._workspace_switching = False
+            log_exception(e, context="workspace-switch", db_path=self.db.path)
+            QMessageBox.warning(self, "Workspace switch failed", str(e))
 
     def _capture_filter_state(self) -> dict:
         return {
@@ -1350,6 +1844,13 @@ class MainWindow(QMainWindow):
 
     def _build_command_palette_commands(self) -> list[PaletteCommand]:
         commands: list[PaletteCommand] = [
+            PaletteCommand(
+                "ui.quick_capture",
+                "Open quick capture",
+                "Show the lightweight capture window for fast inbox entry",
+                ("capture", "tray", "mini", "inbox"),
+                self._open_quick_capture_dialog,
+            ),
             PaletteCommand("task.add", "Add task", "Create a new top-level task", ("new", "create", "task"), self._add_task_and_edit),
             PaletteCommand("task.add_child", "Add child task", "Create child under current selection", ("child", "subtask"), self._add_child_to_selected),
             PaletteCommand("task.duplicate", "Duplicate task", "Duplicate selected task", ("clone", "copy"), self._duplicate_selected),
@@ -1378,6 +1879,69 @@ class MainWindow(QMainWindow):
                 "Show analytics dock and refresh metrics",
                 ("dashboard", "analytics"),
                 lambda: (self.analytics_dock.show(), self._toggle_analytics_act.setChecked(True), self._refresh_analytics_panel()),
+            ),
+            PaletteCommand(
+                "ui.open_focus",
+                "Open focus mode",
+                "Show the actionable focus shortlist",
+                ("focus", "today", "next action"),
+                lambda: (self.focus_dock.show(), self._toggle_focus_act.setChecked(True), self._refresh_focus_panel()),
+            ),
+            PaletteCommand(
+                "ui.open_diagnostics",
+                "Open diagnostics",
+                "Inspect health checks and repair tools",
+                ("health", "integrity", "diagnostics"),
+                self._open_diagnostics_dialog,
+            ),
+            PaletteCommand(
+                "help.quick_start",
+                "Open quick start",
+                "Show the welcome/onboarding guide",
+                ("welcome", "onboarding"),
+                self._open_onboarding_dialog,
+            ),
+            PaletteCommand(
+                "workspace.manage",
+                "Open workspace profiles",
+                "Manage and switch named workspace databases",
+                ("workspace", "profile", "database"),
+                self._open_workspace_manager,
+            ),
+            PaletteCommand(
+                "snapshot.history",
+                "Open snapshot history",
+                "Browse local restore points and create restored copies",
+                ("snapshot", "backup", "timeline", "history"),
+                self._open_snapshot_history_dialog,
+            ),
+            PaletteCommand(
+                "ui.relationships",
+                "Open relationship inspector",
+                "Show dependencies, same-tag tasks, and project relations",
+                ("relationships", "dependencies", "related"),
+                lambda: (self.relationships_dock.show(), self._toggle_relationships_act.setChecked(True), self._refresh_relationships_panel()),
+            ),
+            PaletteCommand(
+                "help.quick_add",
+                "Open quick-add help",
+                "Jump to quick-add syntax in the user guide",
+                ("help", "syntax", "quick add"),
+                lambda: self._open_help_anchor("quick-add"),
+            ),
+            PaletteCommand(
+                "help.search",
+                "Open search help",
+                "Jump to advanced search syntax in the user guide",
+                ("help", "search syntax", "filters"),
+                lambda: self._open_help_anchor("search"),
+            ),
+            PaletteCommand(
+                "help.shortcuts",
+                "Open shortcuts help",
+                "Jump to the keyboard shortcut overview",
+                ("help", "keyboard", "shortcuts"),
+                lambda: self._open_help_anchor("shortcuts"),
             ),
             PaletteCommand("ui.focus_search", "Focus search", "Move cursor to search box", ("search", "find"), lambda: self.search.setFocus()),
             PaletteCommand("ui.focus_quick_add", "Focus quick add", "Move cursor to quick-add input", ("quick add", "capture"), lambda: self.quick_add.setFocus()),
@@ -1541,7 +2105,7 @@ class MainWindow(QMainWindow):
 
     def _apply_widget_tooltips(self):
         explicit: list[tuple[QWidget, str]] = [
-            (self.quick_add, "Quick-add task input. Supports due date and priority keywords."),
+            (self.quick_add, "Quick-add task input. Supports inline tags, bucket commands, planning phrases, and natural due dates."),
             (self.search, "Search tasks with free text and operators like status:, due<=, tag:, has:."),
             (self.view_mode, "Choose a built-in perspective: All, Today, Upcoming, Inbox, Someday, Completed/Archive."),
             (self.sort_mode, "Choose how tasks are sorted in the current view."),
@@ -1550,10 +2114,12 @@ class MainWindow(QMainWindow):
             (self.row_del_btn, "Archive focused row."),
             (self.filter_panel, "Advanced filtering controls."),
             (self.details_panel, "Task details editor for notes, tags, recurrence, reminders, and attachments."),
+            (self.relationships_panel, "Relationship inspector for dependencies, same-tag tasks, same-project tasks, and project health context."),
             (self.undo_view, "Undo history list. Click an entry to inspect/step through history."),
             (self.calendar, "Calendar navigator for due-date agenda."),
             (self.calendar_list, "Tasks due on selected calendar date."),
             (self.review_panel, "Guided weekly/daily review workspace with actionable categories."),
+            (self.focus_panel, "Focus mode shortlist for overdue, today, and next-action tasks."),
             (self.analytics_panel, "Completion and workload analytics dashboard."),
         ]
 
@@ -1592,6 +2158,217 @@ class MainWindow(QMainWindow):
         self._help_dialog.raise_()
         self._help_dialog.activateWindow()
 
+    def _open_help_anchor(self, anchor: str):
+        self._open_help_dialog()
+        if self._help_dialog is not None:
+            self._help_dialog.open_anchor(anchor)
+
+    def _open_diagnostics_dialog(self):
+        if self._diagnostics_dialog is None:
+            self._diagnostics_dialog = DiagnosticsDialog(
+                self.db,
+                theme_name_provider=lambda: self.model.theme_mgr.current_theme_name(),
+                workspace_name_provider=lambda: self.workspace_name,
+                workspace_path_provider=self._workspace_data_path,
+                parent=self,
+            )
+        self._diagnostics_dialog.refresh_report()
+        self._diagnostics_dialog.show()
+        self._diagnostics_dialog.raise_()
+        self._diagnostics_dialog.activateWindow()
+
+    def _workspace_data_path(self) -> str:
+        try:
+            return str(Path(self.workspace_db_path).expanduser().resolve().parent)
+        except Exception:
+            return str(app_data_dir())
+
+    def _update_window_title(self):
+        self.setWindowTitle(f"{APP_NAME} - {self.workspace_name}")
+
+    def _init_status_bar(self):
+        self._version_label = QLabel(app_display_version(), self)
+        self._version_label.setObjectName("AppVersionLabel")
+        self._version_label.setToolTip(f"{APP_NAME} {app_display_version()}")
+        self._version_label.setStatusTip("Application version.")
+        self.statusBar().addPermanentWidget(self._version_label)
+        self._workspace_label = QLabel(f"Workspace: {self.workspace_name}", self)
+        self._workspace_label.setObjectName("WorkspaceStatusLabel")
+        self._workspace_label.setToolTip(self.workspace_db_path)
+        self._workspace_label.setStatusTip("Current workspace profile and database path.")
+        self.statusBar().addPermanentWidget(self._workspace_label)
+        self.statusBar().showMessage(
+            f"Ready. {APP_NAME} {app_display_version()} | Workspace: {self.workspace_name}",
+            3000,
+        )
+
+    def _apply_accessibility_metadata(self):
+        named_widgets: list[tuple[QWidget, str, str]] = [
+            (self.quick_add, "Quick add input", "Enter a task or planning command with optional tags, bucket directives, due dates, and priority."),
+            (self.search, "Task search input", "Search tasks with free text and structured operators."),
+            (self.view, "Task tree", "Primary tree view for tasks, hierarchy, and inline editing."),
+            (self.view_mode, "Perspective selector", "Switch between All, Today, Upcoming, Inbox, Someday, and Completed."),
+            (self.sort_mode, "Sort mode selector", "Choose the current task sorting mode."),
+            (self.filter_panel, "Filters panel", "Advanced filtering options for the task tree."),
+            (self.details_panel, "Task details panel", "Edit notes, tags, recurrence, reminders, and attachments."),
+            (self.relationships_panel, "Relationship inspector", "Inspect dependencies, related tasks, and project context for the selected task."),
+            (self.review_panel, "Review workflow panel", "Guided weekly review tabs with direct task actions."),
+            (self.focus_panel, "Focus mode panel", "Short actionable list for focused work sessions."),
+            (self.analytics_panel, "Analytics panel", "Lightweight completion and planning summary."),
+            (self.calendar, "Calendar navigator", "Monthly calendar with due-date activity markers."),
+        ]
+        for widget, name, description in named_widgets:
+            widget.setAccessibleName(name)
+            widget.setAccessibleDescription(description)
+
+    def _task_count(self) -> int:
+        try:
+            return len(self.db.fetch_tasks())
+        except Exception:
+            return 0
+
+    def _maybe_show_onboarding(self):
+        completed = self.model.settings.value("ui/onboarding_completed", False, type=bool)
+        task_count = self._task_count()
+        if not should_show_onboarding(bool(completed), int(task_count)):
+            if int(task_count) > 0 and not bool(completed):
+                self.model.settings.setValue("ui/onboarding_completed", True)
+            return
+        self._open_onboarding_dialog(force=True)
+
+    def _load_demo_data(self):
+        if self._task_count() > 0:
+            QMessageBox.information(self, "Demo data not loaded", "Demo data is only added to an empty task list.")
+            return
+        try:
+            summary = populate_demo_database(self.db, today=date.today())
+        except Exception as e:
+            log_exception(e, context="demo-data-load", db_path=self.db.path)
+            QMessageBox.warning(self, "Demo data not loaded", str(e))
+            return
+
+        self.model.reload_all(reset_header_state=False)
+        self._set_perspective_by_key("all")
+        self._refresh_review_panel()
+        self._refresh_focus_panel()
+        self._refresh_calendar_list()
+        self._refresh_calendar_markers()
+        self._refresh_analytics_panel()
+        self._refresh_details_dock()
+        self._refresh_relationships_panel()
+        self.statusBar().showMessage(
+            f"Loaded demo dataset with {int(summary.get('task_count') or 0)} tasks.",
+            3500,
+        )
+
+    def _open_demo_workspace(self):
+        try:
+            result = create_demo_workspace(self.workspace_manager, today=date.today())
+        except Exception as e:
+            log_exception(e, context="demo-workspace-create", db_path=self.db.path)
+            QMessageBox.warning(self, "Demo workspace failed", str(e))
+            return
+        workspace = result.get("workspace") or {}
+        summary = result.get("summary") or {}
+        self.statusBar().showMessage(
+            f"Created demo workspace '{str(workspace.get('name') or '')}' with {int(summary.get('task_count') or 0)} tasks.",
+            3500,
+        )
+        self._switch_to_workspace(str(workspace.get("id") or ""))
+
+    def _open_onboarding_dialog(self, force: bool = False):
+        can_load_demo = self._task_count() == 0
+        if not force and not can_load_demo:
+            self.model.settings.setValue("ui/onboarding_completed", True)
+        dlg = WelcomeDialog(can_load_demo=can_load_demo, can_create_demo_workspace=True, parent=self)
+        result = dlg.exec()
+        if result == dlg.DialogCode.Accepted:
+            self.model.settings.setValue("ui/onboarding_completed", bool(dlg.remember.isChecked()))
+            action = dlg.action()
+            if action == WelcomeDialog.ACTION_DEMO:
+                self._load_demo_data()
+            elif action == WelcomeDialog.ACTION_DEMO_WORKSPACE:
+                self._open_demo_workspace()
+            elif action == WelcomeDialog.ACTION_HELP:
+                self._open_help_anchor("overview")
+            elif action == WelcomeDialog.ACTION_REVIEW:
+                self.review_dock.show()
+                self._toggle_review_act.setChecked(True)
+                self._refresh_review_panel()
+        else:
+            self.model.settings.setValue("ui/onboarding_completed", bool(dlg.remember.isChecked()))
+
+    def _ensure_quick_capture_dialog(self) -> QuickCaptureDialog:
+        if self._quick_capture_dialog is None:
+            dlg = QuickCaptureDialog(self)
+            dlg.captureRequested.connect(self._on_quick_capture_requested)
+            dlg.revealRequested.connect(self._show_main_window)
+            self._quick_capture_dialog = dlg
+        return self._quick_capture_dialog
+
+    def _on_quick_capture_requested(self, raw: str):
+        result = self._submit_capture_text(str(raw or ""), default_bucket=self._capture_default_bucket("capture_dialog"))
+        dlg = self._ensure_quick_capture_dialog()
+        if result.success:
+            dlg.capture_succeeded(result.message or "Captured.")
+        else:
+            dlg.capture_failed(result.message or "Capture failed.")
+
+    def _open_quick_capture_dialog(self):
+        dlg = self._ensure_quick_capture_dialog()
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        dlg.input.setFocus()
+        dlg.input.selectAll()
+
+    def _install_optional_global_capture_hotkey(self):
+        self._global_capture_hotkey = None
+        try:
+            from qhotkey import QHotkey  # type: ignore
+        except Exception:
+            return
+        try:
+            hotkey = QHotkey(QKeySequence("Ctrl+Alt+Space"), True, self)
+            hotkey.activated.connect(self._open_quick_capture_dialog)
+            self._global_capture_hotkey = hotkey
+        except Exception:
+            self._global_capture_hotkey = None
+
+    def _init_quick_capture_tools(self):
+        self._ensure_quick_capture_dialog()
+        self._install_optional_global_capture_hotkey()
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+
+        tray = QSystemTrayIcon(self)
+        tray.setToolTip(APP_NAME)
+        tray.setIcon(self.windowIcon())
+        menu = QMenu(self)
+
+        quick_capture_act = QAction("Quick capture…", self)
+        quick_capture_act.triggered.connect(self._open_quick_capture_dialog)
+        show_app_act = QAction("Show app", self)
+        show_app_act.triggered.connect(self._show_main_window)
+        quit_act = QAction("Quit", self)
+        quit_act.triggered.connect(self.close)
+
+        menu.addAction(quick_capture_act)
+        menu.addAction(show_app_act)
+        menu.addSeparator()
+        menu.addAction(quit_act)
+        tray.setContextMenu(menu)
+        tray.activated.connect(
+            lambda reason: self._show_main_window()
+            if reason in {
+                QSystemTrayIcon.ActivationReason.Trigger,
+                QSystemTrayIcon.ActivationReason.DoubleClick,
+            }
+            else None
+        )
+        tray.show()
+        self._tray_icon = tray
+
     # ---------- Menus / toolbar ----------
     def _build_menus_and_toolbar(self):
         undo_act = QAction("Undo", self)
@@ -1605,6 +2382,10 @@ class MainWindow(QMainWindow):
         add_act = QAction("Add task", self)
         add_act.setShortcut(QKeySequence(Qt.CTRL | Qt.Key.Key_N))
         add_act.triggered.connect(self._add_task_and_edit)
+
+        quick_capture_act = QAction("Quick capture…", self)
+        quick_capture_act.setShortcut(QKeySequence(Qt.CTRL | Qt.ALT | Qt.Key.Key_Space))
+        quick_capture_act.triggered.connect(self._open_quick_capture_dialog)
 
         add_child_act = QAction("Add child task", self)
         add_child_act.setShortcut(QKeySequence(Qt.CTRL | Qt.SHIFT | Qt.Key.Key_N))
@@ -1650,10 +2431,21 @@ class MainWindow(QMainWindow):
         toggle_details_act.setChecked(True)
         toggle_details_act.triggered.connect(lambda checked: self.details_dock.setVisible(bool(checked)))
 
+        toggle_relationships_act = QAction("Relationship inspector", self)
+        toggle_relationships_act.setCheckable(True)
+        toggle_relationships_act.setChecked(False)
+        toggle_relationships_act.triggered.connect(lambda checked: self.relationships_dock.setVisible(bool(checked)))
+
         toggle_undo_history_act = QAction("Undo history", self)
         toggle_undo_history_act.setCheckable(True)
         toggle_undo_history_act.setChecked(False)
         toggle_undo_history_act.triggered.connect(lambda checked: self.undo_dock.setVisible(bool(checked)))
+
+        toggle_focus_act = QAction("Focus mode", self)
+        toggle_focus_act.setCheckable(True)
+        toggle_focus_act.setChecked(False)
+        toggle_focus_act.setShortcut(QKeySequence(Qt.CTRL | Qt.SHIFT | Qt.Key.Key_F))
+        toggle_focus_act.triggered.connect(lambda checked: self.focus_dock.setVisible(bool(checked)))
 
         toggle_calendar_act = QAction("Calendar/agenda", self)
         toggle_calendar_act.setCheckable(True)
@@ -1721,6 +2513,33 @@ class MainWindow(QMainWindow):
         help_act.setShortcut(QKeySequence(Qt.Key.Key_F1))
         help_act.triggered.connect(self._open_help_dialog)
 
+        onboarding_act = QAction("Quick Start…", self)
+        onboarding_act.triggered.connect(self._open_onboarding_dialog)
+
+        help_quick_add_act = QAction("Quick-add syntax", self)
+        help_quick_add_act.triggered.connect(lambda: self._open_help_anchor("quick-add"))
+
+        help_search_act = QAction("Search syntax", self)
+        help_search_act.triggered.connect(lambda: self._open_help_anchor("search"))
+
+        help_palette_act = QAction("Command palette help", self)
+        help_palette_act.triggered.connect(lambda: self._open_help_anchor("command-palette"))
+
+        help_templates_act = QAction("Template placeholders", self)
+        help_templates_act.triggered.connect(lambda: self._open_help_anchor("templates"))
+
+        help_shortcuts_act = QAction("Keyboard shortcuts", self)
+        help_shortcuts_act.triggered.connect(lambda: self._open_help_anchor("shortcuts"))
+
+        diagnostics_act = QAction("Diagnostics…", self)
+        diagnostics_act.triggered.connect(self._open_diagnostics_dialog)
+
+        snapshot_history_act = QAction("Snapshot history…", self)
+        snapshot_history_act.triggered.connect(self._open_snapshot_history_dialog)
+
+        workspace_profiles_act = QAction("Workspace profiles…", self)
+        workspace_profiles_act.triggered.connect(self._open_workspace_manager)
+
         command_palette_act = QAction("Command palette…", self)
         command_palette_act.setShortcut(QKeySequence(Qt.CTRL | Qt.SHIFT | Qt.Key.Key_P))
         command_palette_act.triggered.connect(self._open_command_palette)
@@ -1757,6 +2576,10 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
 
         m_file = menubar.addMenu("File")
+        m_file.addAction(quick_capture_act)
+        m_file.addAction(workspace_profiles_act)
+        m_file.addAction(snapshot_history_act)
+        m_file.addSeparator()
         m_file.addAction(settings_act)
 
         # Backup submenu (data + themes)
@@ -1821,7 +2644,9 @@ class MainWindow(QMainWindow):
         m_view = menubar.addMenu("View")
         m_view.addAction(toggle_filters_act)
         m_view.addAction(toggle_details_act)
+        m_view.addAction(toggle_relationships_act)
         m_view.addAction(toggle_undo_history_act)
+        m_view.addAction(toggle_focus_act)
         m_view.addAction(toggle_calendar_act)
         m_view.addAction(toggle_review_act)
         m_view.addAction(toggle_analytics_act)
@@ -1855,14 +2680,34 @@ class MainWindow(QMainWindow):
         m_reminders.addAction(reminder_mode_p1_only_act)
 
         m_tools = menubar.addMenu("Tools")
+        m_tools.addAction(quick_capture_act)
+        m_tools.addSeparator()
         m_tools.addAction(command_palette_act)
+        m_tools.addSeparator()
+        m_tools.addAction(workspace_profiles_act)
+        m_tools.addAction(snapshot_history_act)
+        m_tools.addSeparator()
+        m_tools.addAction(toggle_relationships_act)
+        m_tools.addAction(toggle_focus_act)
+        m_tools.addAction(onboarding_act)
+        m_tools.addSeparator()
+        m_tools.addAction(diagnostics_act)
         m_tools.addSeparator()
         m_tools.addAction(save_template_act)
         m_tools.addAction(create_template_act)
         m_tools.addAction(delete_template_act)
 
         m_help = menubar.addMenu("Help")
+        m_help.addAction(onboarding_act)
         m_help.addAction(help_act)
+        m_help.addSeparator()
+        m_help.addAction(help_quick_add_act)
+        m_help.addAction(help_search_act)
+        m_help.addAction(help_palette_act)
+        m_help.addAction(help_templates_act)
+        m_help.addAction(help_shortcuts_act)
+        m_help.addAction(diagnostics_act)
+        m_help.addAction(snapshot_history_act)
         m_help.addSeparator()
         m_help.addAction(toggle_tooltips_act)
 
@@ -1875,16 +2720,21 @@ class MainWindow(QMainWindow):
         tb.setObjectName("MainToolBar")
         self.addToolBar(tb)
         tb.addAction(add_act)
+        tb.addAction(quick_capture_act)
         tb.addAction(add_child_act)
         tb.addAction(archive_act)
         tb.addAction(duplicate_act)
+        tb.addAction(toggle_relationships_act)
+        tb.addAction(toggle_focus_act)
         tb.addSeparator()
         tb.addAction(undo_act)
         tb.addAction(redo_act)
 
         self._toggle_filters_act = toggle_filters_act
         self._toggle_details_act = toggle_details_act
+        self._toggle_relationships_act = toggle_relationships_act
         self._toggle_undo_history_act = toggle_undo_history_act
+        self._toggle_focus_act = toggle_focus_act
         self._toggle_calendar_act = toggle_calendar_act
         self._toggle_review_act = toggle_review_act
         self._toggle_analytics_act = toggle_analytics_act
@@ -1912,9 +2762,16 @@ class MainWindow(QMainWindow):
 
         self.addAction(duplicate_act)
         self.addAction(duplicate_tree_act)
+        self.addAction(quick_capture_act)
         self.addAction(move_up_act)
         self.addAction(move_down_act)
         self.addAction(command_palette_act)
+        self.addAction(toggle_focus_act)
+        self.addAction(toggle_relationships_act)
+        self.addAction(onboarding_act)
+        self.addAction(diagnostics_act)
+        self.addAction(snapshot_history_act)
+        self.addAction(workspace_profiles_act)
         self.addAction(browse_archive_act)
         self.view.addAction(edit_current_act)
         self.view.addAction(edit_current_numpad_act)
@@ -1926,6 +2783,7 @@ class MainWindow(QMainWindow):
             (undo_act, "Undo the most recent change."),
             (redo_act, "Redo the next change in history."),
             (add_act, "Create a new top-level task."),
+            (quick_capture_act, "Open the lightweight quick-capture window for fast inbox capture and command entry."),
             (add_child_act, "Create a child task under the selected row."),
             (archive_act, "Archive selected task(s)."),
             (hard_del_act, "Permanently delete selected task(s)."),
@@ -1936,7 +2794,9 @@ class MainWindow(QMainWindow):
             (bulk_edit_act, "Apply one operation to multiple selected tasks."),
             (toggle_filters_act, "Show or hide the Filters dock."),
             (toggle_details_act, "Show or hide the Details dock."),
+            (toggle_relationships_act, "Show or hide the relationship inspector for dependencies, related tasks, and project context."),
             (toggle_undo_history_act, "Show or hide the Undo History dock."),
+            (toggle_focus_act, "Show or hide the Focus mode dock for current actionable work."),
             (toggle_calendar_act, "Show or hide the Calendar/Agenda dock."),
             (toggle_review_act, "Show or hide the guided Review Workflow dock."),
             (toggle_analytics_act, "Show or hide analytics summary dashboard."),
@@ -1954,10 +2814,19 @@ class MainWindow(QMainWindow):
             (create_template_act, "Create tasks from a saved template."),
             (delete_template_act, "Delete a saved template."),
             (settings_act, "Open app settings and theme editor."),
+            (workspace_profiles_act, "Manage named workspace profiles and switch databases explicitly."),
             (backup_settings_act, "Configure automatic backup interval and retention."),
             (backup_now_act, "Create a versioned backup snapshot now."),
+            (snapshot_history_act, "Browse local restore points and restore them into a new database copy or workspace."),
             (command_palette_act, "Open the searchable command palette for keyboard-first actions."),
+            (onboarding_act, "Open the quick-start guide and onboarding tips."),
             (help_act, "Open the embedded help guide with indexed chapters."),
+            (help_quick_add_act, "Jump straight to quick-add syntax help."),
+            (help_search_act, "Jump straight to search syntax help."),
+            (help_palette_act, "Jump straight to command palette help."),
+            (help_templates_act, "Jump straight to template placeholder help."),
+            (help_shortcuts_act, "Jump straight to keyboard shortcuts help."),
+            (diagnostics_act, "Inspect database health, restore-point availability, and repair options."),
             (toggle_tooltips_act, "Turn interface tooltips on or off."),
             (reminder_mode_normal_act, "Show all due reminders."),
             (reminder_mode_mute_act, "Suppress all reminder popups."),
@@ -2247,6 +3116,8 @@ class MainWindow(QMainWindow):
     def _on_current_changed(self, *_):
         self._update_row_action_buttons()
         self._refresh_details_dock()
+        self._refresh_focus_panel()
+        self._refresh_relationships_panel()
 
     def _set_perspective_by_key(self, key: str):
         for i in range(self.view_mode.count()):
@@ -2506,6 +3377,8 @@ class MainWindow(QMainWindow):
         icon = self.model.current_window_icon()
         if icon is not None:
             self.setWindowIcon(icon)
+            if self._tray_icon is not None:
+                self._tray_icon.setIcon(icon)
         self.model.refresh_due_highlights()
 
     def _open_settings(self):
@@ -2597,6 +3470,8 @@ class MainWindow(QMainWindow):
             "priority": 80,
             "status": 120,
             "progress": 130,
+            "next_action": 260,
+            "project_state": 140,
         }
         for logical in range(self.proxy.columnCount()):
             key = self.model.column_key(logical)
@@ -2640,10 +3515,20 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_toggle_details_act"):
             self._toggle_details_act.setChecked(bool(details_visible))
 
+        relationships_visible = s.value("ui/relationships_dock_visible", False, type=bool)
+        self.relationships_dock.setVisible(bool(relationships_visible))
+        if hasattr(self, "_toggle_relationships_act"):
+            self._toggle_relationships_act.setChecked(bool(relationships_visible))
+
         undo_visible = s.value("ui/undo_dock_visible", False, type=bool)
         self.undo_dock.setVisible(bool(undo_visible))
         if hasattr(self, "_toggle_undo_history_act"):
             self._toggle_undo_history_act.setChecked(bool(undo_visible))
+
+        focus_visible = s.value("ui/focus_dock_visible", False, type=bool)
+        self.focus_dock.setVisible(bool(focus_visible))
+        if hasattr(self, "_toggle_focus_act"):
+            self._toggle_focus_act.setChecked(bool(focus_visible))
 
         cal_visible = s.value("ui/calendar_dock_visible", False, type=bool)
         self.calendar_dock.setVisible(bool(cal_visible))
@@ -2673,54 +3558,81 @@ class MainWindow(QMainWindow):
         self._refresh_calendar_list()
         self._refresh_calendar_markers()
         self._refresh_review_panel()
+        self._refresh_focus_panel()
         self._refresh_analytics_panel()
+        self._refresh_relationships_panel()
         self._apply_filters()
 
         QTimer.singleShot(0, self._update_row_action_buttons)
 
     def closeEvent(self, event):
+        if not self._workspace_switching:
+            self._save_ui_settings()
         s = self.model.settings
-        s.setValue("ui/geometry", self.saveGeometry())
-        s.setValue("ui/window_state", self.saveState())
-        s.setValue("ui/header_state", self.view.header().saveState())
-        s.setValue("ui/filters_dock_visible", self.filter_dock.isVisible())
-        s.setValue("ui/details_dock_visible", self.details_dock.isVisible())
-        s.setValue("ui/undo_dock_visible", self.undo_dock.isVisible())
-        s.setValue("ui/calendar_dock_visible", self.calendar_dock.isVisible())
-        s.setValue("ui/review_dock_visible", self.review_dock.isVisible())
-        s.setValue("ui/analytics_dock_visible", self.analytics_dock.isVisible())
-        s.setValue("ui/tooltips_enabled", self._tooltips_enabled)
-        s.setValue("ui/perspective", str(self.view_mode.currentData() or "all"))
-        s.setValue("ui/sort_mode", str(self.sort_mode.currentData() or "manual"))
-        s.setValue("ui/reminder_mode", self._reminder_mode)
-        if s.value("backup/on_close", True, type=bool):
+        if not self._workspace_switching and s.value("backup/on_close", True, type=bool):
             try:
-                create_versioned_backup(self.db, "close")
+                path = create_versioned_backup(self.db, "close")
                 keep = s.value("backup/keep_count", 20, type=int)
-                rotate_backups(max_keep=int(keep or 20))
-            except Exception:
+                rotate_backups(max_keep=int(keep or 20), db_path=self.db.path)
+                s.setValue("backup/last_snapshot_path", str(path))
+                s.setValue("backup/last_snapshot_at", datetime.now().isoformat(timespec="seconds"))
+            except Exception as e:
+                log_exception(e, context="close-backup", db_path=self.db.path)
                 pass
+        if self._tray_icon is not None:
+            self._tray_icon.hide()
         super().closeEvent(event)
 
 
 def main():
-    app = QApplication(sys.argv)
-    app.setOrganizationName("FocusTools")
-    app.setApplicationName("CustomTaskManager")
-
-    w = MainWindow()
-    w.resize(1100, 650)
-    w.show()
-
-    # Close splash again after show (covers slow first paint)
     try:
-        import pyi_splash  # type: ignore
-        pyi_splash.close()
-    except Exception:
-        pass
+        app = QApplication(sys.argv)
+        app.setOrganizationName(APP_ORGANIZATION)
+        app.setApplicationName(APP_NAME)
+        app.setApplicationVersion(APP_VERSION)
 
-    sys.exit(app.exec())
+        workspace_manager = WorkspaceProfileManager()
+        current_workspace = workspace_manager.current_workspace()
+        workspace_manager.ensure_workspace_state(str(current_workspace.get("id") or "default"))
+        workspace_manager.restore_state_for(str(current_workspace.get("id") or "default"))
+        current_db_path = lambda: str(workspace_manager.current_workspace().get("db_path") or app_db_path())
+        install_exception_hooks(current_db_path)
+
+        w = MainWindow(workspace_manager, str(current_workspace.get("id") or "default"))
+        w.resize(1100, 650)
+        w.show()
+
+        # Close splash again after show (covers slow first paint)
+        try:
+            import pyi_splash  # type: ignore
+            pyi_splash.close()
+        except Exception:
+            pass
+
+        return app.exec()
+    except DatabaseMigrationError as e:
+        log_exception(e, context="startup-migration", db_path=app_db_path())
+        if QApplication.instance() is not None:
+            QMessageBox.critical(
+                None,
+                "Database migration failed",
+                f"The task database could not be opened safely.\n\n{e}",
+            )
+        else:
+            print(f"Database migration failed: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        log_exception(e, context="startup", db_path=app_db_path())
+        if QApplication.instance() is not None:
+            QMessageBox.critical(
+                None,
+                "Application startup failed",
+                f"{APP_NAME} could not start.\n\n{e}",
+            )
+        else:
+            print(f"{APP_NAME} startup failed: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

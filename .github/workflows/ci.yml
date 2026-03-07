@@ -38,6 +38,9 @@ jobs:
       - name: Compile Python sources
         run: python -m py_compile *.py
 
+      - name: Run tests
+        run: pytest -q
+
       - name: UI smoke import
         run: |
           python - <<'PY'

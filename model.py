@@ -14,6 +14,7 @@ from commands import (
     AddCustomColumnCommand, RemoveCustomColumnCommand,
     TaskMutationCommand, TaskCollectionMutationCommand, CreateTasksFromPayloadCommand,
 )
+from project_intelligence import analyze_projects
 from theme import ThemeManager
 
 
@@ -124,12 +125,15 @@ class TaskTreeModel(QAbstractItemModel):
             ("priority", "Priority", "int"),
             ("status", "Status", "status"),
             ("progress", "Progress", "progress"),
+            ("next_action", "Next action", "text"),
+            ("project_state", "State", "text"),
         ]
 
         self.custom_cols = []
         self.root = _Node(task=None, parent=None)
         self._id_map: dict[int, _Node] = {}
         self._last_added_task_id: int | None = None
+        self._project_health_cache: dict[int, dict] = {}
 
         self.reload_all(reset_header_state=False)
 
@@ -145,13 +149,23 @@ class TaskTreeModel(QAbstractItemModel):
 
     # ---------- Load / rebuild ----------
     def reload_all(self, reset_header_state: bool = False):
+        tasks = self.db.fetch_tasks()
         self.beginResetModel()
         self.custom_cols = self.db.fetch_custom_columns()
-        self._rebuild_tree(self.db.fetch_tasks())
+        self._rebuild_tree(tasks)
+        self._rebuild_project_health_cache(tasks)
         self.endResetModel()
 
         if reset_header_state:
             self.settings.remove("ui/header_state")
+
+    def _rebuild_project_health_cache(self, tasks: list[dict] | None = None):
+        rows = tasks if tasks is not None else self.db.fetch_tasks()
+        self._project_health_cache = {
+            int(row["id"]): row
+            for row in analyze_projects(rows, stalled_days=14, today=date.today())
+        }
+        return rows
 
     def _rebuild_tree(self, tasks: list[dict]):
         self.root = _Node(task=None, parent=None)
@@ -285,6 +299,12 @@ class TaskTreeModel(QAbstractItemModel):
             )
 
         self.db.conn.commit()
+        self._rebuild_project_health_cache()
+        if parent_node.task:
+            pidx0 = self._index_for_node(parent_node, 0)
+            pidx_last = self._index_for_node(parent_node, self.columnCount() - 1)
+            if pidx0.isValid() and pidx_last.isValid():
+                self.dataChanged.emit(pidx0, pidx_last, [Qt.ItemDataRole.DisplayRole])
 
 
     def _apply_sibling_order(self, parent_id: int | None, ordered_ids: list[int]) -> None:
@@ -343,6 +363,7 @@ class TaskTreeModel(QAbstractItemModel):
             )
 
         self.db.conn.commit()
+        self._rebuild_project_health_cache()
         self.endResetModel()
 
         self.refresh_due_highlights()
@@ -448,7 +469,7 @@ class TaskTreeModel(QAbstractItemModel):
             | Qt.ItemFlag.ItemIsDropEnabled
         )
         key = self.column_key(index.column())
-        if key not in {"last_update", "progress"}:
+        if key not in {"last_update", "progress", "next_action", "project_state"}:
             base |= Qt.ItemFlag.ItemIsEditable
         return base
 
@@ -558,7 +579,7 @@ class TaskTreeModel(QAbstractItemModel):
     def setData(self, index: QModelIndex, value, role=Qt.ItemDataRole.EditRole):
         if role != Qt.ItemDataRole.EditRole or not index.isValid():
             return False
-        if self.column_key(index.column()) in {"last_update", "progress"}:
+        if self.column_key(index.column()) in {"last_update", "progress", "next_action", "project_state"}:
             return False
 
         node = index.internalPointer()
@@ -623,6 +644,31 @@ class TaskTreeModel(QAbstractItemModel):
         pct = int(round((100.0 * done) / total))
         return f"{done}/{total} ({pct}%)"
 
+    def _project_summary(self, task_id: int | None) -> dict | None:
+        if task_id is None:
+            return None
+        return self._project_health_cache.get(int(task_id))
+
+    def _project_state_text(self, task: dict, node: _Node | None) -> str:
+        summary = self._project_summary(int(task.get("id") or 0))
+        if summary:
+            return str(summary.get("state_label") or "")
+        if str(task.get("status") or "") == "Done":
+            return ""
+        if str(task.get("waiting_for") or "").strip():
+            updated = _parse_iso_datetime(task.get("last_update"))
+            if updated is not None:
+                age = max(0, (date.today() - updated.date()).days)
+                return f"Waiting {age}d" if age > 0 else "Waiting"
+            return "Waiting"
+        if int(task.get("blocked_by_count") or 0) > 0 or str(task.get("status") or "") == "Blocked":
+            return "Blocked"
+        if str(task.get("planned_bucket") or "").strip().lower() == "someday":
+            return "Someday"
+        if node is not None and node.children:
+            return "Project"
+        return "Ready"
+
     def _auto_mark_parent_done_chain(self, start_node: _Node | None) -> list[_Node]:
         changed_nodes: list[_Node] = []
         cur = start_node
@@ -643,6 +689,11 @@ class TaskTreeModel(QAbstractItemModel):
             key = self.core_cols[col][0]
             if key == "progress":
                 return self._progress_text(node)
+            if key == "next_action":
+                summary = self._project_summary(int(task.get("id") or 0))
+                return str(summary.get("next_action_badge") or "") if summary else ""
+            if key == "project_state":
+                return self._project_state_text(task, node)
             return task.get(key)
         cc = self.custom_cols[col - len(self.core_cols)]
         return task.get("custom", {}).get(cc["id"])
@@ -744,6 +795,8 @@ class TaskTreeModel(QAbstractItemModel):
         priority: int | None = None,
         parent_id: int | None = None,
         planned_bucket: str | None = None,
+        tags: list[str] | None = None,
+        reminder_at: str | None = None,
     ) -> bool:
         parent_node = self._parent_node_for_id(parent_id)
         effective_parent_id = None if parent_node == self.root else int(parent_node.task["id"])
@@ -774,10 +827,10 @@ class TaskTreeModel(QAbstractItemModel):
             "recurrence_rule_id": None,
             "recurrence_origin_task_id": None,
             "is_generated_occurrence": 0,
-            "reminder_at": None,
+            "reminder_at": reminder_at,
             "reminder_minutes_before": None,
             "reminder_fired_at": None,
-            "tags": [],
+            "tags": list(tags or []),
             "custom": {},
         }
 
@@ -848,6 +901,9 @@ class TaskTreeModel(QAbstractItemModel):
     # ---------- High-level task helpers ----------
     def task_details(self, task_id: int) -> dict | None:
         return self.db.fetch_task_details(int(task_id))
+
+    def task_relationships(self, task_id: int, limit: int = 12) -> dict:
+        return self.db.fetch_task_relationships(int(task_id), limit=int(limit or 12))
 
     def all_tags(self) -> list[str]:
         return self.db.fetch_all_tags()
@@ -1035,6 +1091,9 @@ class TaskTreeModel(QAbstractItemModel):
     def project_health_for_task(self, task_id: int, stalled_days: int = 14) -> dict | None:
         return self.db.project_health_for_task(int(task_id), stalled_days=int(stalled_days))
 
+    def fetch_focus_data(self, include_waiting: bool = False, limit: int = 40) -> list[dict]:
+        return self.db.fetch_focus_data(include_waiting=bool(include_waiting), limit=int(limit))
+
     def fetch_analytics_summary(self, trend_days: int = 14, tag_days: int = 30) -> dict:
         return self.db.fetch_analytics_summary(trend_days=int(trend_days), tag_days=int(tag_days))
 
@@ -1214,6 +1273,17 @@ class TaskTreeModel(QAbstractItemModel):
         else:
             self.reload_all(reset_header_state=False)
 
+    def _ancestor_task_ids(self, task_id: int) -> list[int]:
+        node = self.node_for_id(int(task_id))
+        if not node:
+            return []
+        out = []
+        cur = node.parent
+        while cur and cur.task:
+            out.append(int(cur.task["id"]))
+            cur = cur.parent
+        return out
+
     def _now_iso(self) -> str:
         return datetime.now().replace(microsecond=0).isoformat(sep=" ")
 
@@ -1263,14 +1333,17 @@ class TaskTreeModel(QAbstractItemModel):
         if reload:
             self.reload_all(reset_header_state=False)
             return
-        changed_parent_ids = set()
+        self._rebuild_project_health_cache()
+        refresh_ids: list[int] = []
+        seen: set[int] = set()
         for tid in ids:
-            node = self.node_for_id(int(tid))
-            if node and node.parent and node.parent.task:
-                changed_parent_ids.add(int(node.parent.task["id"]))
-            self._refresh_task_node_and_emit(int(tid))
-        for parent_id in changed_parent_ids:
-            self._refresh_task_node_and_emit(int(parent_id))
+            for candidate in [int(tid), *self._ancestor_task_ids(int(tid))]:
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                refresh_ids.append(candidate)
+        for refresh_id in refresh_ids:
+            self._refresh_task_node_and_emit(int(refresh_id))
 
     def _unique_task_ids(self, task_ids: list[int]) -> list[int]:
         ids = []
@@ -1386,6 +1459,12 @@ class TaskTreeModel(QAbstractItemModel):
         parent_node.children.insert(row, node)
 
         self.endInsertRows()
+        self._rebuild_project_health_cache()
+        if parent_node.task:
+            pidx0 = self._index_for_node(parent_node, 0)
+            pidx_last = self._index_for_node(parent_node, self.columnCount() - 1)
+            if pidx0.isValid() and pidx_last.isValid():
+                self.dataChanged.emit(pidx0, pidx_last, [Qt.ItemDataRole.DisplayRole])
         self.refresh_due_highlights()
 
     def _model_remove_task(self, task_id: int):
@@ -1411,6 +1490,7 @@ class TaskTreeModel(QAbstractItemModel):
         drop_ids(node)
 
         self.endRemoveRows()
+        self._rebuild_project_health_cache()
 
         changed_parents: list[_Node] = []
         if parent_node.task:
@@ -1438,6 +1518,15 @@ class TaskTreeModel(QAbstractItemModel):
                     self.dataChanged.emit(gpidx0, gpidx_last, [Qt.ItemDataRole.DisplayRole])
 
         self.refresh_due_highlights()
+
+    def _apply_sibling_orders_batch(self, orders: list[tuple[int | None, list[int]]]) -> None:
+        seen: set[str] = set()
+        for parent_id, ordered_ids in orders or []:
+            key = "root" if parent_id is None else str(int(parent_id))
+            if key in seen:
+                continue
+            seen.add(key)
+            self._apply_sibling_order(parent_id, list(ordered_ids or []))
 
     def _apply_cell_change(self, task_id: int, col: int, new_value):
         """
@@ -1483,6 +1572,7 @@ class TaskTreeModel(QAbstractItemModel):
         auto_completed_parents: list[_Node] = []
         if edited_key == "status":
             auto_completed_parents = self._auto_mark_parent_done_chain(node.parent)
+        self._rebuild_project_health_cache()
 
         idx0 = self._index_for_node(node, 0)
         idx_last = self._index_for_node(node, self.columnCount() - 1)
@@ -1580,6 +1670,7 @@ class TaskTreeModel(QAbstractItemModel):
             changed_parents.extend(self._auto_mark_parent_done_chain(old_parent_node))
         if new_parent_node.task and new_parent_node is not old_parent_node:
             changed_parents.extend(self._auto_mark_parent_done_chain(new_parent_node))
+        self._rebuild_project_health_cache()
 
         for parent_node in (old_parent_node, new_parent_node):
             if parent_node.task:

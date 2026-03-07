@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+)
+
+from auto_backup import backups_dir, list_restore_points
+from backup_io import import_payload_into_dbfile, read_backup_file
+from ui_layout import add_left_aligned_buttons, configure_box_layout
+from workspace_profiles import WorkspaceProfileManager
+
+
+class SnapshotHistoryDialog(QDialog):
+    def __init__(self, db, workspace_manager: WorkspaceProfileManager, parent=None):
+        super().__init__(parent)
+        self._db = db
+        self._workspace_manager = workspace_manager
+        self._switch_workspace_id: str | None = None
+
+        self.setWindowTitle("Snapshot history")
+        self.resize(920, 620)
+
+        root = QVBoxLayout(self)
+        configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
+
+        intro = QLabel(
+            "Snapshots are read-only restore points. Restoring always creates a separate database copy or a new "
+            "workspace; the current database is never overwritten in place."
+        )
+        intro.setWordWrap(True)
+        root.addWidget(intro)
+
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(6)
+        self.tree.setHeaderLabels(["Created", "Reason", "Tasks", "Archived", "Size", "File"])
+        self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tree.currentItemChanged.connect(self._update_details)
+        self.tree.itemDoubleClicked.connect(lambda *_: self._restore_to_copy())
+        root.addWidget(self.tree, 1)
+
+        self.details = QPlainTextEdit()
+        self.details.setReadOnly(True)
+        self.details.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.details.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.details.setMinimumHeight(180)
+        root.addWidget(self.details, 1)
+
+        actions = QHBoxLayout()
+        self.refresh_btn = QPushButton("Refresh")
+        self.open_folder_btn = QPushButton("Open snapshot folder")
+        self.restore_btn = QPushButton("Restore to DB copy")
+        self.workspace_btn = QPushButton("Create workspace from snapshot")
+        self.close_btn = QPushButton("Close")
+        add_left_aligned_buttons(
+            actions,
+            self.refresh_btn,
+            self.open_folder_btn,
+            self.restore_btn,
+            self.workspace_btn,
+            self.close_btn,
+        )
+        root.addLayout(actions)
+
+        self.refresh_btn.clicked.connect(self.refresh)
+        self.open_folder_btn.clicked.connect(self._open_folder)
+        self.restore_btn.clicked.connect(self._restore_to_copy)
+        self.workspace_btn.clicked.connect(self._create_workspace_from_snapshot)
+        self.close_btn.clicked.connect(self.reject)
+
+        self.refresh()
+
+    def switch_workspace_id(self) -> str | None:
+        return self._switch_workspace_id
+
+    def _selected_snapshot(self) -> dict | None:
+        item = self.tree.currentItem()
+        if item is None:
+            return None
+        row = item.data(0, Qt.ItemDataRole.UserRole)
+        return row if isinstance(row, dict) else None
+
+    def refresh(self):
+        selected_path = None
+        current = self._selected_snapshot()
+        if current:
+            selected_path = str(current.get("path") or "")
+        self.tree.clear()
+        for row in list_restore_points(limit=100, db_path=getattr(self._db, "path", None)):
+            item = QTreeWidgetItem(
+                [
+                    str(row.get("created_at") or ""),
+                    str(row.get("reason") or ""),
+                    str(row.get("task_count") or "-"),
+                    str(row.get("archived_count") or "-"),
+                    str(row.get("size_bytes") or 0),
+                    str(row.get("filename") or ""),
+                ]
+            )
+            item.setData(0, Qt.ItemDataRole.UserRole, row)
+            self.tree.addTopLevelItem(item)
+            if selected_path and str(row.get("path") or "") == selected_path:
+                self.tree.setCurrentItem(item)
+        for col in range(self.tree.columnCount()):
+            self.tree.resizeColumnToContents(col)
+        if self.tree.currentItem() is None and self.tree.topLevelItemCount() > 0:
+            self.tree.setCurrentItem(self.tree.topLevelItem(0))
+        self._update_details(self.tree.currentItem(), None)
+
+    def _update_details(self, current, _previous):
+        row = None
+        if current is not None:
+            row = current.data(0, Qt.ItemDataRole.UserRole)
+        if not isinstance(row, dict):
+            self.details.setPlainText("No snapshot selected.")
+            return
+        lines = [
+            f"File: {str(row.get('path') or '')}",
+            f"Created: {str(row.get('created_at') or '')}",
+            f"Reason: {str(row.get('reason') or '')}",
+            f"Exported at: {str(row.get('exported_at') or '') or '-'}",
+            f"Tasks: {str(row.get('task_count') or '-')}",
+            f"Archived tasks: {str(row.get('archived_count') or '-')}",
+            f"Custom columns: {str(row.get('custom_column_count') or '-')}",
+            f"Saved views: {str(row.get('saved_view_count') or '-')}",
+            f"Templates: {str(row.get('template_count') or '-')}",
+            f"Size (bytes): {str(row.get('size_bytes') or 0)}",
+        ]
+        self.details.setPlainText("\n".join(lines))
+
+    def _open_folder(self):
+        path = backups_dir(getattr(self._db, "path", None))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _restore_to_copy(self):
+        row = self._selected_snapshot()
+        if not row:
+            return
+        target_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Restore snapshot to database copy",
+            "restored_tasks.sqlite3",
+            "SQLite DB (*.sqlite3 *.db);;All files (*.*)",
+        )
+        if not target_path:
+            return
+        try:
+            payload = read_backup_file(Path(str(row.get("path") or "")), parent=self)
+            report = import_payload_into_dbfile(self, payload, Path(target_path), make_file_backup=True)
+        except Exception as e:
+            QMessageBox.critical(self, "Snapshot restore failed", str(e))
+            return
+        QMessageBox.information(
+            self,
+            "Snapshot restored",
+            f"Snapshot restored to:\n{target_path}\n\n"
+            f"Imported tasks: {int(report.imported_tasks or 0)}\n"
+            f"Created columns: {int(report.created_columns or 0)}\n"
+            f"Mode: {str(report.mode or '')}",
+        )
+
+    def _create_workspace_from_snapshot(self):
+        row = self._selected_snapshot()
+        if not row:
+            return
+        default_name = f"Restored {str(row.get('created_at') or '').replace(':', '-').replace(' ', ' ')}".strip()
+        name, ok = QInputDialog.getText(self, "Create workspace from snapshot", "Workspace name:", text=default_name)
+        if not ok or not str(name or "").strip():
+            return
+        workspace_id = None
+        record = None
+        try:
+            suggested = self._workspace_manager.suggested_db_path(str(name).strip())
+            payload = read_backup_file(Path(str(row.get("path") or "")), parent=self)
+            record = self._workspace_manager.create_workspace(str(name).strip(), db_path=suggested)
+            workspace_id = str(record.get("id") or "")
+            report = import_payload_into_dbfile(self, payload, Path(str(record.get("db_path") or "")), make_file_backup=False)
+        except Exception as e:
+            if workspace_id:
+                try:
+                    self._workspace_manager.remove_workspace(workspace_id)
+                except Exception:
+                    pass
+            QMessageBox.critical(self, "Workspace creation failed", str(e))
+            return
+
+        res = QMessageBox.question(
+            self,
+            "Workspace created",
+            f"Created workspace '{str(record.get('name') or '')}'.\n\n"
+            f"Imported tasks: {int(report.imported_tasks or 0)}\n\n"
+            "Switch to it now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if res == QMessageBox.StandardButton.Yes:
+            self._switch_workspace_id = str(record.get("id") or "")
+            self.accept()

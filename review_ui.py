@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -38,6 +39,9 @@ class ReviewWorkflowPanel(QWidget):
     markDoneRequested = Signal(list)
     archiveRequested = Signal(list)
     restoreRequested = Signal(list)
+    acknowledgeRequested = Signal(str, list)
+    clearAcknowledgedRequested = Signal(str)
+    useCategoryRequested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -46,6 +50,18 @@ class ReviewWorkflowPanel(QWidget):
 
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(8, 8, 8, 8), spacing=10)
+
+        guide_group = QGroupBox("Weekly review guide")
+        guide_layout = QVBoxLayout(guide_group)
+        configure_box_layout(guide_layout)
+        self.guide = QLabel(
+            "Suggested flow: Inbox -> Overdue -> No Due Date -> Projects -> Waiting -> Archive. "
+            "Use Acknowledge to hide items you have already handled."
+        )
+        self.guide.setWordWrap(True)
+        self.guide.setToolTip("Guidance for running a quick weekly review pass.")
+        guide_layout.addWidget(self.guide)
+        root.addWidget(guide_group)
 
         controls_group = QGroupBox("Review controls")
         controls_root = QVBoxLayout(controls_group)
@@ -93,17 +109,39 @@ class ReviewWorkflowPanel(QWidget):
 
         actions = QHBoxLayout()
         self.focus_btn = QPushButton("Focus")
+        self.focus_btn.setToolTip("Jump to the selected review item in the main tree.")
+        self.use_btn = QPushButton("Use in tree")
+        self.use_btn.setToolTip("Apply a best-effort main-tree view for the current review category.")
+        self.ack_btn = QPushButton("Acknowledge")
+        self.ack_btn.setToolTip("Hide the selected review items from this category until cleared.")
         self.done_btn = QPushButton("Mark done")
+        self.done_btn.setToolTip("Mark the selected review items as Done.")
         self.archive_btn = QPushButton("Archive")
+        self.archive_btn.setToolTip("Archive the selected review items.")
         self.restore_btn = QPushButton("Restore")
-        add_left_aligned_buttons(actions, self.focus_btn, self.done_btn, self.archive_btn, self.restore_btn)
+        self.restore_btn.setToolTip("Restore the selected archived review items.")
+        self.clear_ack_btn = QPushButton("Clear handled")
+        self.clear_ack_btn.setToolTip("Show previously acknowledged items again for the current category.")
+        add_left_aligned_buttons(
+            actions,
+            self.focus_btn,
+            self.use_btn,
+            self.ack_btn,
+            self.done_btn,
+            self.archive_btn,
+            self.restore_btn,
+            self.clear_ack_btn,
+        )
         root.addLayout(actions)
 
         self.refresh_btn.clicked.connect(self._emit_refresh)
         self.focus_btn.clicked.connect(self._emit_focus)
+        self.use_btn.clicked.connect(lambda: self.useCategoryRequested.emit(self.current_category()))
+        self.ack_btn.clicked.connect(lambda: self.acknowledgeRequested.emit(self.current_category(), self.selected_task_ids()))
         self.done_btn.clicked.connect(lambda: self.markDoneRequested.emit(self.selected_task_ids()))
         self.archive_btn.clicked.connect(lambda: self.archiveRequested.emit(self.selected_task_ids()))
         self.restore_btn.clicked.connect(lambda: self.restoreRequested.emit(self.selected_task_ids()))
+        self.clear_ack_btn.clicked.connect(lambda: self.clearAcknowledgedRequested.emit(self.current_category()))
 
     def _emit_refresh(self):
         self.refreshRequested.emit(
@@ -118,6 +156,12 @@ class ReviewWorkflowPanel(QWidget):
             return None
         w = self.tabs.widget(idx)
         return w if isinstance(w, QListWidget) else None
+
+    def current_category(self) -> str:
+        idx = self.tabs.currentIndex()
+        if idx < 0 or idx >= len(REVIEW_CATEGORIES):
+            return REVIEW_CATEGORIES[0][0]
+        return str(REVIEW_CATEGORIES[idx][0])
 
     def selected_task_ids(self) -> list[int]:
         lw = self._current_list()
@@ -164,13 +208,19 @@ class ReviewWorkflowPanel(QWidget):
             return f"{base} | {extra}"
         return base
 
-    def set_review_data(self, data: dict[str, list[dict]]):
+    def set_review_data(self, data: dict[str, list[dict]], hidden_counts: dict[str, int] | None = None):
         payload = data or {}
+        hidden_map = hidden_counts or {}
+        total_visible = 0
+        total_hidden = 0
         for key, label in REVIEW_CATEGORIES:
             lw = self._lists.get(key)
             if lw is None:
                 continue
             rows = payload.get(key) or []
+            hidden = int(hidden_map.get(key) or 0)
+            total_visible += len(rows)
+            total_hidden += hidden
             lw.clear()
             for row in rows:
                 item = QListWidgetItem(self._format_item_text(row))
@@ -179,3 +229,7 @@ class ReviewWorkflowPanel(QWidget):
             tab_idx = self.tabs.indexOf(lw)
             if tab_idx >= 0:
                 self.tabs.setTabText(tab_idx, f"{label} ({len(rows)})")
+        self.guide.setText(
+            "Suggested flow: Inbox -> Overdue -> No Due Date -> Projects -> Waiting -> Archive. "
+            f"Visible items: {total_visible}. Hidden handled items: {total_hidden}."
+        )

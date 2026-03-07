@@ -28,6 +28,11 @@ class QuickAddResult:
     description: str
     due_date: str | None = None  # YYYY-MM-DD
     priority: int | None = None
+    tags: list[str] = field(default_factory=list)
+    bucket: str | None = None
+    create_as_child: bool = False
+    parent_hint: str | None = None
+    parse_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -36,10 +41,13 @@ class ParsedSearch:
     statuses: set[str] = field(default_factory=set)
     priority: int | None = None
     due_ops: list[tuple[str, str]] = field(default_factory=list)  # (op, YYYY-MM-DD)
+    due_none: bool = False
     tags: set[str] = field(default_factory=set)
+    bucket: str | None = None
     has_children: bool | None = None
     blocked_only: bool = False
     waiting_only: bool = False
+    recurring_only: bool = False
     parse_warnings: list[str] = field(default_factory=list)
 
 
@@ -167,13 +175,71 @@ def parse_quick_add(text: str) -> QuickAddResult:
     if not raw:
         return QuickAddResult(description="")
 
-    tokens = raw.split()
+    try:
+        tokens = shlex.split(raw)
+    except Exception:
+        tokens = raw.split()
     consumed = [False] * len(tokens)
     due_date: date | None = None
     priority: int | None = None
+    tags: list[str] = []
+    tag_seen: set[str] = set()
+    bucket: str | None = None
+    create_as_child = False
+    parent_hint: str | None = None
+    warnings: list[str] = []
+
+    for i, tok in enumerate(tokens):
+        s = str(tok or "").strip()
+        sl = s.lower()
+        if not s:
+            continue
+        if sl == "+child":
+            create_as_child = True
+            consumed[i] = True
+            continue
+        if s.startswith(">"):
+            hint = s[1:].strip()
+            if hint:
+                parent_hint = hint
+            else:
+                warnings.append("Ignored empty parent hint.")
+            consumed[i] = True
+            continue
+        if s.startswith("@") or s.startswith("#"):
+            tag = s[1:].strip()
+            if tag:
+                tag_key = tag.lower()
+                if tag_key not in tag_seen:
+                    tag_seen.add(tag_key)
+                    tags.append(tag)
+            else:
+                warnings.append(f"Ignored invalid tag token: {s}")
+            consumed[i] = True
+            continue
+        if s.startswith("/"):
+            bucket_key = s[1:].strip().lower()
+            if bucket_key in {"inbox", "today", "upcoming", "someday"}:
+                bucket = bucket_key
+                consumed[i] = True
+                continue
+        if s.startswith("!"):
+            body = s[1:].strip().lower()
+            m = re.fullmatch(r"p([1-5])", body)
+            if m:
+                priority = int(m.group(1))
+                consumed[i] = True
+                continue
+            p = PRIORITY_ALIASES.get(body)
+            if p is not None:
+                priority = p
+                consumed[i] = True
+                continue
 
     # Priority: p1..p5
     for i, tok in enumerate(tokens):
+        if consumed[i]:
+            continue
         m = re.fullmatch(r"p([1-5])", tok.strip().lower())
         if m:
             priority = int(m.group(1))
@@ -183,6 +249,8 @@ def parse_quick_add(text: str) -> QuickAddResult:
     # Priority aliases
     if priority is None:
         for i, tok in enumerate(tokens):
+            if consumed[i]:
+                continue
             p = PRIORITY_ALIASES.get(tok.strip().lower())
             if p is not None:
                 priority = p
@@ -193,6 +261,9 @@ def parse_quick_add(text: str) -> QuickAddResult:
     if due_date is None:
         i = 0
         while i < len(tokens):
+            if consumed[i]:
+                i += 1
+                continue
             d, used = _parse_quick_due_phrase(tokens, i)
             if d is not None:
                 due_date = d
@@ -204,6 +275,8 @@ def parse_quick_add(text: str) -> QuickAddResult:
     # Legacy two-token next weekday parser (kept as fallback).
     if due_date is None:
         for i in range(len(tokens) - 1):
+            if consumed[i] or consumed[i + 1]:
+                continue
             d = _parse_next_weekday(tokens[i], tokens[i + 1])
             if d is not None:
                 due_date = d
@@ -214,6 +287,8 @@ def parse_quick_add(text: str) -> QuickAddResult:
     # Basic date words (today / tomorrow)
     if due_date is None:
         for i, tok in enumerate(tokens):
+            if consumed[i]:
+                continue
             d = _parse_natural_day_token(tok)
             if d is not None:
                 due_date = d
@@ -223,6 +298,8 @@ def parse_quick_add(text: str) -> QuickAddResult:
     # ISO date
     if due_date is None:
         for i, tok in enumerate(tokens):
+            if consumed[i]:
+                continue
             d = _parse_iso_date(tok)
             if d is not None:
                 due_date = d
@@ -232,6 +309,8 @@ def parse_quick_add(text: str) -> QuickAddResult:
     # dd-mmm-yyyy
     if due_date is None:
         for i, tok in enumerate(tokens):
+            if consumed[i]:
+                continue
             d = _parse_dd_mmm_yyyy(tok)
             if d is not None:
                 due_date = d
@@ -248,6 +327,11 @@ def parse_quick_add(text: str) -> QuickAddResult:
         description=description,
         due_date=due_date.isoformat() if due_date else None,
         priority=priority,
+        tags=tags,
+        bucket=bucket,
+        create_as_child=create_as_child,
+        parent_hint=parent_hint,
+        parse_warnings=warnings,
     )
 
 
@@ -310,11 +394,18 @@ def parse_search_query(text: str) -> ParsedSearch:
         if m:
             op = m.group(1)
             rhs = m.group(2).strip()
+            if rhs == "none":
+                out.due_none = True
+                continue
             d = _resolve_search_date(rhs)
             if d is None:
                 out.parse_warnings.append(f"Ignored invalid due token: {s}")
             else:
                 out.due_ops.append((op, d.isoformat()))
+            continue
+
+        if sl == "due:none":
+            out.due_none = True
             continue
 
         if sl.startswith("tag:"):
@@ -323,6 +414,14 @@ def parse_search_query(text: str) -> ParsedSearch:
                 out.tags.add(tag)
             else:
                 out.parse_warnings.append(f"Ignored invalid tag token: {s}")
+            continue
+
+        if sl.startswith("bucket:"):
+            bucket = s.split(":", 1)[1].strip().lower()
+            if bucket:
+                out.bucket = bucket
+            else:
+                out.parse_warnings.append(f"Ignored invalid bucket token: {s}")
             continue
 
         if sl == "has:children":
@@ -336,6 +435,9 @@ def parse_search_query(text: str) -> ParsedSearch:
             continue
         if sl in {"waiting:true", "waiting:yes", "is:waiting"}:
             out.waiting_only = True
+            continue
+        if sl in {"recurring:true", "recurring:yes", "is:recurring"}:
+            out.recurring_only = True
             continue
 
         free_tokens.append(s)

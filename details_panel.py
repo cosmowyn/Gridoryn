@@ -46,6 +46,16 @@ class TaskDetailsPanel(QWidget):
         self.meta.setToolTip("Read-only summary of selected task and progress.")
         root.addWidget(self.meta)
 
+        project_group = QGroupBox("Project intelligence")
+        project_layout = QVBoxLayout(project_group)
+        configure_box_layout(project_layout)
+        self.project_insights = QLabel("No project insights available.")
+        self.project_insights.setWordWrap(True)
+        self.project_insights.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.project_insights.setToolTip("Next-action, blocked/stalled state, and related project insight.")
+        project_layout.addWidget(self.project_insights)
+        root.addWidget(project_group)
+
         editor_group = QGroupBox("Task details")
         editor_layout = QVBoxLayout(editor_group)
         configure_box_layout(editor_layout)
@@ -193,6 +203,7 @@ class TaskDetailsPanel(QWidget):
         self._task_id = int(details["id"]) if details and details.get("id") is not None else None
         if not details:
             self.meta.setText("No task selected")
+            self.project_insights.setText("No project insights available.")
             self.notes.setPlainText("")
             self.tags.setText("")
             self.waiting_for.setText("")
@@ -220,20 +231,58 @@ class TaskDetailsPanel(QWidget):
         proj = details.get("project_summary") or {}
         proj_txt = ""
         if proj:
+            proj_bits = []
+            state_label = str(proj.get("state_label") or "").strip()
+            if state_label:
+                proj_bits.append(f"Project: {state_label}")
             next_desc = str(proj.get("next_action_description") or "").strip()
             if next_desc:
-                proj_txt = f" | Next action: {next_desc}"
+                proj_bits.append(f"Next action: {next_desc}")
             elif bool(proj.get("no_next_action")):
-                proj_txt = " | Next action: none"
-            if bool(proj.get("blocked")):
-                proj_txt += " | Blocked"
-            if bool(proj.get("stalled")):
-                proj_txt += f" | Stalled ({int(proj.get('stale_days') or 0)}d)"
+                proj_bits.append("Next action: none")
+            blocked_children = int(proj.get("blocked_child_count") or 0)
+            waiting_children = int(proj.get("waiting_child_count") or 0)
+            if blocked_children > 0:
+                proj_bits.append(f"Blocked children: {blocked_children}")
+            if waiting_children > 0:
+                proj_bits.append(f"Waiting children: {waiting_children}")
+            oldest_waiting = int(proj.get("oldest_waiting_days") or 0)
+            if oldest_waiting > 0:
+                proj_bits.append(f"Oldest waiting: {oldest_waiting}d")
+            stalled_reason = str(proj.get("stalled_reason_text") or "").strip()
+            if stalled_reason:
+                proj_bits.append(f"Why stalled: {stalled_reason}")
+            proj_txt = "".join(f" | {part}" for part in proj_bits)
 
         self.meta.setText(
             f"ID {details['id']} | Status: {details.get('status', '')} | Priority: {details.get('priority', '')}"
             f"{prog_txt} | Recurrence: {rec_txt}{proj_txt}"
         )
+
+        insight_lines: list[str] = []
+        if proj:
+            if state_label:
+                insight_lines.append(f"State: {state_label}")
+            if next_desc:
+                insight_lines.append(f"Next action: {next_desc}")
+            elif bool(proj.get("no_next_action")):
+                insight_lines.append("Next action: none available")
+            if blocked_children > 0 or waiting_children > 0:
+                insight_lines.append(
+                    f"Blocked children: {blocked_children} | Waiting children: {waiting_children}"
+                )
+            if oldest_waiting > 0:
+                insight_lines.append(f"Oldest waiting child: {oldest_waiting} day(s)")
+            if stalled_reason:
+                insight_lines.append(f"Why stalled: {stalled_reason}")
+        else:
+            waiting_for = str(details.get("waiting_for") or "").strip()
+            dep_count = len(details.get("dependencies") or [])
+            if waiting_for:
+                insight_lines.append(f"Waiting for: {waiting_for}")
+            if dep_count > 0:
+                insight_lines.append(f"Blocked by: {dep_count} dependency task(s)")
+        self.project_insights.setText("\n".join(insight_lines) if insight_lines else "No project insights available.")
 
         self.notes.setPlainText(str(details.get("notes") or ""))
         self.tags.setText(", ".join(str(t) for t in (details.get("tags") or [])))

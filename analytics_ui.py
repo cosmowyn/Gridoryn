@@ -93,6 +93,30 @@ class AnalyticsPanel(QWidget):
         lists.addWidget(tags_group, 1)
         root.addLayout(lists, 1)
 
+        insight_lists = QHBoxLayout()
+        configure_box_layout(insight_lists)
+        workload_group = QGroupBox("Workload warnings")
+        workload_layout = QVBoxLayout(workload_group)
+        configure_box_layout(workload_layout)
+        self.workload_list = QListWidget()
+        self.workload_list.setToolTip("Lightweight workload warnings based on due-date clustering and overdue growth.")
+        self.workload_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.workload_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        workload_layout.addWidget(self.workload_list)
+
+        hints_group = QGroupBox("Scheduling hints")
+        hints_layout = QVBoxLayout(hints_group)
+        configure_box_layout(hints_layout)
+        self.hints_list = QListWidget()
+        self.hints_list.setToolTip("Optional planning hints. These never modify tasks automatically.")
+        self.hints_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.hints_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        hints_layout.addWidget(self.hints_list)
+
+        insight_lists.addWidget(workload_group, 1)
+        insight_lists.addWidget(hints_group, 1)
+        root.addLayout(insight_lists, 1)
+
         self.refresh_btn.clicked.connect(self._emit_refresh)
 
     def _emit_refresh(self):
@@ -126,3 +150,22 @@ class AnalyticsPanel(QWidget):
             tag = str(row.get("tag") or "")
             count = int(row.get("count") or 0)
             self.tags_list.addItem(QListWidgetItem(f"{tag}: {count}"))
+
+        self.workload_list.clear()
+        busiest = payload.get("workload_busiest_days") or []
+        warnings = payload.get("workload_warnings") or []
+        for row in busiest:
+            due = str(row.get("due_date") or "")
+            total = int(row.get("task_count") or 0)
+            urgent = int(row.get("high_priority_count") or 0)
+            self.workload_list.addItem(QListWidgetItem(f"{due}: {total} due ({urgent} high priority)"))
+        for row in warnings:
+            self.workload_list.addItem(QListWidgetItem(str(row.get("message") or "")))
+        if self.workload_list.count() == 0:
+            self.workload_list.addItem(QListWidgetItem("No workload warnings."))
+
+        self.hints_list.clear()
+        for row in payload.get("scheduling_hints") or []:
+            self.hints_list.addItem(QListWidgetItem(str(row.get("message") or "")))
+        if self.hints_list.count() == 0:
+            self.hints_list.addItem(QListWidgetItem("No scheduling hints."))

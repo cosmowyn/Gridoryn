@@ -45,10 +45,16 @@ HELP_CHAPTERS: list[HelpChapter] = [
         <ul>
             <li>The <strong>task tree</strong> remains the central workspace for planning, editing, and reordering work.</li>
             <li><strong>Quick add</strong> captures tasks quickly with natural date and priority parsing.</li>
+            <li><strong>Quick capture</strong> provides a lightweight capture window and tray/menu-bar entry for fast inbox capture without working directly in the main tree.</li>
             <li><strong>Search, filters, saved views, and perspectives</strong> let you move between planning contexts quickly.</li>
             <li><strong>Perspective buttons</strong> keep All, Today, Upcoming, Inbox, Someday, and Completed / Archive visible as first-class navigation targets.</li>
             <li><strong>Details, calendar, review, undo history, and analytics docks</strong> add depth without replacing the main tree workflow.</li>
+            <li><strong>Focus mode</strong> provides a low-noise shortlist of overdue, today, and next-action work for the current session.</li>
+            <li><strong>Quick Start</strong> offers first-run onboarding, sample data, and fast links into the guide and review workflow.</li>
             <li><strong>Calendar double-click entry</strong> lets you create a dated task directly from the calendar and jump straight into editing.</li>
+            <li><strong>Relationship inspector</strong> surfaces dependencies, dependents, same-tag tasks, same-project context, and project health in one place.</li>
+            <li><strong>Workspace profiles</strong> keep multiple databases explicit and let each workspace restore its own layout and view state.</li>
+            <li><strong>Snapshot history</strong> shows restore points with metadata and restores them safely into a new database copy or workspace.</li>
             <li><strong>Templates, recurrence, reminders, tags, attachments, backups, themes, and archive restore</strong> are integrated into the same database-backed workflow.</li>
         </ul>
         <p>Use the tree for immediate work, the details panel for deeper metadata, the command palette for fast keyboard actions, the review workflow for weekly cleanup, and analytics for lightweight trust-building metrics.</p>
@@ -93,7 +99,19 @@ HELP_CHAPTERS: list[HelpChapter] = [
         title="Quick Add Syntax",
         keywords=[
             "quick add",
+            "quick capture",
             "natural language",
+            "@work",
+            "#urgent",
+            "!p1",
+            "/today",
+            "/inbox",
+            "+child",
+            ">parent",
+            "move this",
+            "postpone overdue",
+            "show blocked",
+            "create weekly review",
             "today",
             "tomorrow",
             "tonight",
@@ -123,11 +141,28 @@ HELP_CHAPTERS: list[HelpChapter] = [
         <p><strong>Recognized priority patterns</strong>:</p>
         <ul>
             <li><code>p1</code> to <code>p5</code></li>
+            <li><code>!p1</code> to <code>!p5</code></li>
             <li><code>high</code>, <code>medium</code>, <code>low</code></li>
+        </ul>
+        <p><strong>Inline capture directives</strong>:</p>
+        <ul>
+            <li><code>@work</code> and <code>#urgent</code> add tags</li>
+            <li><code>/inbox</code>, <code>/today</code>, <code>/upcoming</code>, <code>/someday</code> set the planning bucket</li>
+            <li><code>+child</code> creates the task as a child of the current selection when one exists</li>
+            <li><code>&gt;parent</code>, <code>&gt;selected</code>, or <code>&gt;123</code> route capture under a matching parent task when possible</li>
+        </ul>
+        <p><strong>Command-style planning phrases</strong>:</p>
+        <ul>
+            <li><code>move this to next friday</code></li>
+            <li><code>postpone all overdue work tasks by 2 days</code></li>
+            <li><code>create weekly review every friday at 16:00</code></li>
+            <li><code>show blocked tasks</code></li>
         </ul>
         <p><strong>Examples</strong>:</p>
         <ul>
             <li><code>Call supplier tomorrow p1</code></li>
+            <li><code>Weekly sync @ops !p2 /today</code></li>
+            <li><code>Draft proposal +child next week</code></li>
             <li><code>Finish report 12-Mar-2026 high</code></li>
             <li><code>Review budget next monday</code></li>
             <li><code>Book venue in 2 weeks low</code></li>
@@ -147,9 +182,12 @@ HELP_CHAPTERS: list[HelpChapter] = [
             "priority",
             "due",
             "tag",
+            "bucket",
+            "due:none",
             "has:children",
             "blocked",
             "waiting",
+            "recurring",
         ],
         body_html="""
         <p>The search bar supports free text and structured operators in the same query.</p>
@@ -158,10 +196,13 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><code>status:todo</code>, <code>status:in progress</code>, <code>status:blocked</code>, <code>status:done</code></li>
             <li><code>priority:1</code></li>
             <li><code>due&lt;today</code>, <code>due&lt;=2026-03-12</code>, <code>due&gt;=12-Mar-2026</code></li>
+            <li><code>due:none</code></li>
             <li><code>tag:work</code></li>
+            <li><code>bucket:inbox</code>, <code>bucket:today</code>, <code>bucket:upcoming</code>, <code>bucket:someday</code></li>
             <li><code>has:children</code>, <code>has:nochildren</code></li>
             <li><code>blocked:true</code> or <code>is:blocked</code></li>
             <li><code>waiting:true</code> or <code>is:waiting</code></li>
+            <li><code>recurring:true</code> or <code>is:recurring</code></li>
         </ul>
         <p>Free text remains active and is combined with the operators above. The Filters dock can then narrow results further by status, priority range, due-date filters, tags, hide-done, overdue-only, blocked-only, and waiting-only settings.</p>
         <p>Saved filter views store the current filter/search state so you can return to frequently used working contexts with one action or one command-palette search.</p>
@@ -179,13 +220,16 @@ HELP_CHAPTERS: list[HelpChapter] = [
             "template",
             "backup",
             "theme",
+            "workspace",
+            "snapshot",
+            "relationships",
         ],
         body_html="""
         <p>Open the command palette with <code>Ctrl+Shift+P</code> to run actions without leaving the keyboard.</p>
         <ul>
             <li>Type part of a command title, alias, or keyword to filter the list.</li>
             <li>Press <strong>Enter</strong> to run the selected command.</li>
-            <li>Commands include add task, add child, duplicate, archive, delete, open details, change status, change priority, apply saved views, go to perspectives such as <strong>Go to Inbox</strong>, insert templates, focus search or quick add, and open backup/theme import-export actions.</li>
+            <li>Commands include quick capture, add task, add child, duplicate, archive, delete, open details, open focus mode, open diagnostics, open the relationship inspector, change status, change priority, apply saved views, go to perspectives such as <strong>Go to Inbox</strong>, insert templates, open workspace profiles, open snapshot history, open quick-start help, focus search or quick add, and open backup/theme import-export actions.</li>
             <li>The command list is extensible and includes dynamic entries such as saved views and saved templates.</li>
         </ul>
         <p>Use the palette when you know what you want to do but do not want to hunt through menus.</p>
@@ -328,9 +372,39 @@ HELP_CHAPTERS: list[HelpChapter] = [
         <ul>
             <li>Adjust thresholds for waiting age, stalled threshold, and recent window.</li>
             <li>Double-click a row to focus it in the main tree.</li>
-            <li>Use the action buttons to focus, mark done, archive, or restore directly from the review dock.</li>
+            <li>Use the action buttons to focus, use the category in the main tree, acknowledge handled items, mark done, archive, or restore directly from the review dock.</li>
+            <li>Acknowledged items are hidden from the current review category until you clear the handled state, which keeps repeat review sessions shorter and less noisy.</li>
         </ul>
         <p>This dock is intended for weekly review, daily cleanup, and restoring trust in the system when your task list gets noisy.</p>
+        """,
+    ),
+    HelpChapter(
+        anchor="focus-mode",
+        title="Focus Mode",
+        keywords=["focus", "focus mode", "today", "next action", "overdue", "blocked", "waiting"],
+        body_html="""
+        <p>Focus mode is a lightweight shortlist for doing work, not a replacement for the main tree.</p>
+        <ul>
+            <li>It surfaces <strong>overdue</strong> work, <strong>today</strong> work, and <strong>next actionable tasks</strong> from active projects.</li>
+            <li>The top summary mirrors the current selection so you can keep context while scanning the focus shortlist.</li>
+            <li>Enable <strong>Include blocked/waiting context</strong> when you want due-today dependencies or waiting items visible during planning.</li>
+            <li>Double-click a focus item to jump back to it in the main tree.</li>
+            <li>Use <strong>Open details</strong> when you need notes, reminders, dependencies, or attachments while staying in a focused session.</li>
+        </ul>
+        """,
+    ),
+    HelpChapter(
+        anchor="onboarding",
+        title="Quick Start and Onboarding",
+        keywords=["welcome", "quick start", "onboarding", "sample data", "first run"],
+        body_html="""
+        <p>The Quick Start dialog appears automatically for a new empty task list and is always available from the Help menu.</p>
+        <ul>
+            <li>It highlights the quickest ways to start: Quick add, Search, Command palette, and Review Workflow.</li>
+            <li>You can <strong>start empty</strong>, <strong>load sample data</strong>, <strong>open help</strong>, or <strong>jump straight into review mode</strong>.</li>
+            <li>The automatic first-run display is skipped for existing users with real task data, so upgrades do not become intrusive.</li>
+            <li>You can disable automatic onboarding and reopen it later manually whenever needed.</li>
+        </ul>
         """,
     ),
     HelpChapter(
@@ -354,6 +428,59 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li>Child completion rolls up to the parent progress column and summary metadata.</li>
         </ul>
         <p>These signals are surfaced in the details summary and the review workflow, but they do not remove manual control over task structure or status.</p>
+        """,
+    ),
+    HelpChapter(
+        anchor="relationships",
+        title="Relationships and Project Context",
+        keywords=[
+            "relationships",
+            "dependency",
+            "dependents",
+            "same tag",
+            "same project",
+            "inspector",
+            "blocked",
+            "project path",
+        ],
+        body_html="""
+        <p>The <strong>Relationship inspector</strong> dock adds context around the selected task without replacing the main tree.</p>
+        <ul>
+            <li><strong>Depends on</strong> shows the tasks that currently block the selected task.</li>
+            <li><strong>Blocking</strong> shows tasks that depend on the current task.</li>
+            <li><strong>Children</strong>, <strong>Siblings</strong>, and <strong>Same project</strong> reveal nearby work inside the same project structure.</li>
+            <li><strong>Same tags</strong> and <strong>Same waiting context</strong> help you cluster similar work or follow up on external dependencies.</li>
+            <li>The summary area highlights project state, next action, stalled reason, and same-day workload pressure when relevant.</li>
+        </ul>
+        <p>Double-click any related task in the inspector to focus it back in the main tree.</p>
+        """,
+    ),
+    HelpChapter(
+        anchor="workspaces",
+        title="Workspace Profiles and Snapshot History",
+        keywords=[
+            "workspace",
+            "profile",
+            "database",
+            "snapshot",
+            "history",
+            "restore point",
+            "restore",
+            "switch workspace",
+        ],
+        body_html="""
+        <p><strong>Workspace profiles</strong> let you keep separate databases explicit, for example Work, Personal, or project-specific task sets.</p>
+        <ul>
+            <li>Open <strong>File &gt; Workspace profiles</strong> or the command palette to create a workspace, register an existing database, and switch safely.</li>
+            <li>Each workspace keeps its own current layout, perspective, column visibility, and related UI state.</li>
+            <li>The current workspace name and database path are visible in the main window status bar.</li>
+        </ul>
+        <p><strong>Snapshot history</strong> builds on the existing restore-point system.</p>
+        <ul>
+            <li>It lists snapshot timestamp, reason, task counts, archived counts, size, and file name.</li>
+            <li>Restores are always safe-copy restores: either into a new database file or into a newly created workspace.</li>
+            <li>The current live database is not overwritten in place from the snapshot-history dialog.</li>
+        </ul>
         """,
     ),
     HelpChapter(
@@ -528,6 +655,8 @@ HELP_CHAPTERS: list[HelpChapter] = [
             "rotation",
             "theme",
             "integrity",
+            "workspace",
+            "history",
         ],
         body_html="""
         <p>Backup features are designed for safety and portability.</p>
@@ -535,6 +664,8 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li>Manual data export and import are available from <strong>File &gt; Backup</strong>.</li>
             <li>Theme export and import are stored separately so UI styling can travel without forcing data replacement.</li>
             <li>Automatic versioned snapshots support retention rotation and can also be triggered manually with <strong>Create snapshot now</strong>.</li>
+            <li>Snapshots are stored per workspace/database location so restore points stay aligned with the data they belong to.</li>
+            <li><strong>Snapshot history</strong> exposes restore points as a readable timeline and restores them only into new copies or new workspaces.</li>
             <li>Import validates stored integrity data and warns if the backup appears inconsistent.</li>
             <li>Schema migrations are additive and versioned to preserve existing user data.</li>
         </ul>
@@ -552,7 +683,10 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><code>Ctrl+Shift+N</code> Add child task</li>
             <li><code>Ctrl+F</code> Focus search</li>
             <li><code>Ctrl+L</code> Focus quick add</li>
+            <li><code>Ctrl+Alt+Space</code> Open quick capture</li>
             <li><code>Ctrl+Shift+P</code> Open command palette</li>
+            <li><code>Ctrl+Shift+F</code> Toggle focus mode</li>
+            <li>Relationship inspector, workspace profiles, and snapshot history are available from the command palette for keyboard-first access.</li>
             <li><code>F1</code> Open the embedded help guide</li>
             <li><code>Ctrl+Z</code> Undo (platform standard)</li>
             <li><code>Ctrl+Shift+Z</code> or platform standard Redo</li>
@@ -709,6 +843,12 @@ class HelpDialog(QDialog):
 
         self._populate_index()
         self.browser.scrollToAnchor("home")
+
+    def open_anchor(self, anchor: str):
+        target = str(anchor or "").strip().lstrip("#")
+        if not target:
+            target = "home"
+        self.browser.scrollToAnchor(target)
 
     def _populate_index(self):
         self.index.clear()
