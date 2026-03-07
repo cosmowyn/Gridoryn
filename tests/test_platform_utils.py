@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from PySide6.QtGui import QKeySequence
+
 from platform_utils import (
     OS_LINUX,
     OS_MACOS,
@@ -25,3 +27,7 @@ def test_shortcut_display_uses_option_label_on_macos():
 
 def test_shortcut_display_uses_super_label_on_linux_for_meta():
     assert shortcut_display_text("Meta+L", os_name=OS_LINUX) == "Super+L"
+
+
+def test_standard_key_display_text_is_safe_without_qapplication():
+    assert shortcut_display_text(QKeySequence.StandardKey.Undo, os_name=OS_MACOS) == "Command+Z"
