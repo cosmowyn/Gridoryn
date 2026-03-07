@@ -195,6 +195,15 @@ def _system_palette_colors() -> dict:
         "row_del_border": "#F0B4B4",
         "row_del_hover_bg": "#FADADA",
         "row_del_pressed_bg": "#F6C4C4",
+
+        "clock_face_bg": base_bg,
+        "clock_face_border": mid_hex,
+        "clock_text": text_fg,
+        "clock_tick": mid_hex,
+        "clock_hand": sel_bg,
+        "clock_accent": sel_bg,
+        "clock_accent_text": sel_fg,
+        "clock_center_dot": sel_bg,
     }
 
 
@@ -481,6 +490,24 @@ class ThemeManager:
         }}
         QToolButton#RowDeleteButton:hover {{ background: {c["row_del_hover_bg"]}; }}
         QToolButton#RowDeleteButton:pressed {{ background: {c["row_del_pressed_bg"]}; }}
+
+        QToolButton#PerspectiveNavButton {{
+            background: {c["btn_bg"]};
+            color: {c["btn_fg"]};
+            border: 1px solid {c["btn_border"]};
+            border-radius: 10px;
+            padding: 6px 12px;
+            {_font_css(button_font)}
+        }}
+        QToolButton#PerspectiveNavButton:hover {{ background: {c["btn_hover_bg"]}; }}
+        QToolButton#PerspectiveNavButton:pressed {{ background: {c["btn_pressed_bg"]}; }}
+        QToolButton#PerspectiveNavButton:checked {{
+            background: {c["sel_bg"]};
+            color: {c["sel_fg"]};
+            border: 1px solid {c["input_focus_border"]};
+            font-weight: 600;
+        }}
+        QToolButton#PerspectiveNavButton:checked:hover {{ background: {c["sel_bg"]}; }}
         """
 
         custom = theme.get("custom_qss", "")

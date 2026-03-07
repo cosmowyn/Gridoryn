@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from PySide6.QtGui import QUndoCommand
 
 
@@ -74,12 +76,17 @@ class EditCellCommand(QUndoCommand):
         self.col = int(col)
         self.old = old_value
         self.new = new_value
+        self.generated_task_id = None
 
     def redo(self):
-        self.model._apply_cell_change(self.task_id, self.col, self.new)
+        self.generated_task_id = self.model._apply_cell_change(self.task_id, self.col, self.new)
 
     def undo(self):
         self.model._apply_cell_change(self.task_id, self.col, self.old)
+        if self.generated_task_id is not None and self.model.db.fetch_task_by_id(int(self.generated_task_id)):
+            self.model.db.delete_task(int(self.generated_task_id))
+            self.model.reload_all(reset_header_state=False)
+        self.generated_task_id = None
 
 
 class MoveNodeCommand(QUndoCommand):
@@ -162,3 +169,86 @@ class RemoveCustomColumnCommand(QUndoCommand):
         for tid, v in self.values.items():
             self.model.db.update_custom_value(int(tid), self.col_id, v)
         self.model.reload_all(reset_header_state=True)
+
+
+class TaskMutationCommand(QUndoCommand):
+    def __init__(self, model, task_id: int, text: str, apply_fn, refresh_mode: str = "single"):
+        super().__init__(text)
+        self.model = model
+        self.task_id = int(task_id)
+        self.apply_fn = apply_fn
+        self.refresh_mode = str(refresh_mode or "single")
+        self.before = deepcopy(model.capture_task_snapshot(self.task_id))
+        self.after = None
+
+    def redo(self):
+        if self.after is None:
+            self.apply_fn()
+            self.after = deepcopy(self.model.capture_task_snapshot(self.task_id))
+            if self.after == self.before:
+                self.setObsolete(True)
+                return
+        else:
+            self.model._restore_task_snapshots([self.after], reload=(self.refresh_mode == "reload"))
+            return
+        self.model._refresh_after_task_mutation([self.task_id], reload=(self.refresh_mode == "reload"))
+
+    def undo(self):
+        if self.before is None:
+            return
+        self.model._restore_task_snapshots([self.before], reload=(self.refresh_mode == "reload"))
+
+
+class TaskCollectionMutationCommand(QUndoCommand):
+    def __init__(self, model, task_ids: list[int], text: str, apply_fn, refresh_mode: str = "reload"):
+        super().__init__(text)
+        self.model = model
+        self.task_ids = [int(x) for x in task_ids if int(x) > 0]
+        self.apply_fn = apply_fn
+        self.refresh_mode = str(refresh_mode or "reload")
+        self.before = [deepcopy(s) for s in model.capture_task_snapshots(self.task_ids)]
+        self.after = None
+
+    def redo(self):
+        if self.after is None:
+            self.apply_fn()
+            self.after = [deepcopy(s) for s in self.model.capture_task_snapshots(self.task_ids)]
+            if self.after == self.before:
+                self.setObsolete(True)
+                return
+        else:
+            self.model._restore_task_snapshots(self.after, reload=(self.refresh_mode == "reload"))
+            return
+        self.model._refresh_after_task_mutation(self.task_ids, reload=(self.refresh_mode == "reload"))
+
+    def undo(self):
+        if not self.before:
+            return
+        self.model._restore_task_snapshots(self.before, reload=(self.refresh_mode == "reload"))
+
+
+class CreateTasksFromPayloadCommand(QUndoCommand):
+    def __init__(self, model, payload: dict, parent_id: int | None = None, text: str = "Create tasks"):
+        super().__init__(text)
+        self.model = model
+        self.payload = deepcopy(payload or {})
+        self.parent_id = None if parent_id is None else int(parent_id)
+        self.root_task_id: int | None = None
+        self.created_subtree = None
+
+    def redo(self):
+        if self.created_subtree is None:
+            self.root_task_id = self.model._create_tasks_from_template_payload_now(self.payload, parent_id=self.parent_id)
+            if self.root_task_id is None:
+                self.setObsolete(True)
+                return
+            self.created_subtree = deepcopy(self.model.snapshot_subtree(int(self.root_task_id)))
+        else:
+            self.model._db_restore_subtree(deepcopy(self.created_subtree))
+            self.root_task_id = int(self.created_subtree[0]["id"]) if self.created_subtree else None
+
+    def undo(self):
+        if self.root_task_id is None:
+            return
+        self.model.db.delete_task(int(self.root_task_id))
+        self.model.reload_all(reset_header_state=False)

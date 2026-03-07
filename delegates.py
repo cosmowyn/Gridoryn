@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QDate, QDateTime, Signal
+from PySide6.QtCore import Qt, QDate, QDateTime, QTime, Signal, QEvent
 from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtWidgets import (
-    QStyledItemDelegate, QDateEdit, QDateTimeEdit, QSpinBox, QComboBox, QTreeView,
-    QWidget, QHBoxLayout, QToolButton
+    QStyledItemDelegate, QDateEdit, QSpinBox, QComboBox, QTreeView,
+    QWidget, QHBoxLayout, QToolButton, QPushButton
 )
 
 from model import STATUSES
+from time_picker_ui import TimeDialDialog
 
 
 class _CalendarAwareDateEdit(QDateEdit):
@@ -21,22 +22,6 @@ class _CalendarAwareDateEdit(QDateEdit):
         cal = self.calendarWidget()
         if cal is not None and target.isValid():
             cal.setSelectedDate(target)
-            if hasattr(cal, "showSelectedDate"):
-                cal.showSelectedDate()
-        super().showPopup()
-
-
-class _CalendarAwareDateTimeEdit(QDateTimeEdit):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-    def showPopup(self):
-        target = self.dateTime()
-        if not target.isValid():
-            target = QDateTime.currentDateTime()
-        cal = self.calendarWidget()
-        if cal is not None and target.isValid():
-            cal.setSelectedDate(target.date())
             if hasattr(cal, "showSelectedDate"):
                 cal.showSelectedDate()
         super().showPopup()
@@ -109,43 +94,80 @@ class DateTimeEditorWithClear(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._has_value = False
+        self._time = QTime.currentTime()
+        self._dialog_open = False
 
-        self.datetime_edit = _CalendarAwareDateTimeEdit(self)
-        self.datetime_edit.setCalendarPopup(True)
-        self.datetime_edit.setDisplayFormat("dd-MMM-yyyy HH:mm")
-        self.datetime_edit.dateTimeChanged.connect(self._on_datetime_changed)
-        cal = self.datetime_edit.calendarWidget()
+        self.date_edit = _CalendarAwareDateEdit(self)
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setDisplayFormat("dd-MMM-yyyy")
+        self.date_edit.dateChanged.connect(self._on_date_changed)
+        cal = self.date_edit.calendarWidget()
         if cal is not None:
-            cal.clicked.connect(self._mark_has_datetime_value)
-            cal.activated.connect(self._mark_has_datetime_value)
+            cal.clicked.connect(self._mark_has_value)
+            cal.activated.connect(self._mark_has_value)
+        self.time_btn = QPushButton(self)
+        self.time_btn.setToolTip("Choose time with the radial clock dial.")
+        self.time_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.time_btn.setAutoDefault(False)
+        self.time_btn.pressed.connect(self._pick_time)
         self._set_datetime(QDateTime.currentDateTime(), has_value=False)
 
         self.clear_btn = QToolButton(self)
         self.clear_btn.setText("✕")
         self.clear_btn.setToolTip("Clear date/time")
+        self.clear_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.clear_btn.clicked.connect(self._on_clear_clicked)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
-        lay.addWidget(self.datetime_edit, 1)
+        lay.addWidget(self.date_edit, 1)
+        lay.addWidget(self.time_btn, 0)
         lay.addWidget(self.clear_btn, 0)
+        control_h = max(self.date_edit.sizeHint().height(), self.fontMetrics().height() + 12)
+        self.date_edit.setMinimumHeight(control_h)
+        self.time_btn.setMinimumHeight(control_h)
+        self.clear_btn.setMinimumHeight(control_h)
 
     def _on_clear_clicked(self):
         self._set_datetime(QDateTime.currentDateTime(), has_value=False)
         self.clearRequested.emit()
 
-    def _on_datetime_changed(self, _dt: QDateTime):
+    def _on_date_changed(self, _date: QDate):
         self._has_value = True
 
-    def _mark_has_datetime_value(self, *_):
+    def _mark_has_value(self, *_):
         self._has_value = True
+
+    def picker_open(self) -> bool:
+        return bool(self._dialog_open)
+
+    def _pick_time(self):
+        initial_time = self._time if self._time.isValid() else QTime.currentTime()
+        self._dialog_open = True
+        try:
+            chosen, ok = TimeDialDialog.get_time(initial_time=initial_time, parent=self.window())
+            if not ok or chosen is None or not chosen.isValid():
+                return
+            self._time = QTime(chosen.hour(), chosen.minute(), 0)
+            self._has_value = True
+            self._refresh_time_button()
+        finally:
+            self._dialog_open = False
+
+    def _refresh_time_button(self):
+        qtime = self._time if self._time.isValid() else QTime.currentTime()
+        self.time_btn.setText(qtime.toString("HH:mm"))
 
     def _set_datetime(self, qdt: QDateTime, has_value: bool):
-        self.datetime_edit.blockSignals(True)
-        self.datetime_edit.setDateTime(qdt)
-        self.datetime_edit.blockSignals(False)
+        if not qdt.isValid():
+            qdt = QDateTime.currentDateTime()
+        self.date_edit.blockSignals(True)
+        self.date_edit.setDate(qdt.date())
+        self.date_edit.blockSignals(False)
+        self._time = QTime(qdt.time().hour(), qdt.time().minute(), 0)
         self._has_value = bool(has_value)
+        self._refresh_time_button()
 
     def set_iso_datetime(self, value):
         s = str(value).strip() if value is not None else ""
@@ -163,7 +185,7 @@ class DateTimeEditorWithClear(QWidget):
     def iso_datetime(self):
         if not self._has_value:
             return None
-        qdt = self.datetime_edit.dateTime()
+        qdt = QDateTime(self.date_edit.date(), QTime(self._time.hour(), self._time.minute(), 0))
         return qdt.toString("yyyy-MM-dd HH:mm:ss")
 
 
@@ -181,6 +203,26 @@ class SmartDelegate(QStyledItemDelegate):
     """
 
     EXTRA_VPAD = 10
+    MIN_ROW_HEIGHT = 38
+
+    def _install_editor_event_filters(self, root: QWidget):
+        if root is None:
+            return
+        root.setProperty("_delegate_editor_root", True)
+        root.installEventFilter(self)
+        for child in root.findChildren(QWidget):
+            child.installEventFilter(self)
+
+    def _editor_root_for_widget(self, widget) -> QWidget | None:
+        cur = widget if isinstance(widget, QWidget) else None
+        while cur is not None:
+            try:
+                if bool(cur.property("_delegate_editor_root")):
+                    return cur
+            except Exception:
+                pass
+            cur = cur.parentWidget()
+        return None
 
     def _source_model_and_index(self, index):
         m = index.model()
@@ -299,10 +341,28 @@ class SmartDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
         base = super().sizeHint(option, index)
         fm = option.fontMetrics
-        min_h = fm.height() + self.EXTRA_VPAD
+        min_h = max(fm.height() + self.EXTRA_VPAD, self.MIN_ROW_HEIGHT)
         if base.height() < min_h:
             base.setHeight(min_h)
         return base
+
+    def eventFilter(self, editor, event):
+        if event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
+                root = self._editor_root_for_widget(editor)
+                if root is not None:
+                    self.commitData.emit(root)
+                    self.closeEditor.emit(root, QStyledItemDelegate.EndEditHint.NoHint)
+                    return True
+        if isinstance(editor, DateTimeEditorWithClear):
+            if editor.picker_open() and event.type() in {QEvent.Type.FocusOut, QEvent.Type.Hide}:
+                return True
+        root = self._editor_root_for_widget(editor)
+        if isinstance(root, DateTimeEditorWithClear):
+            if root.picker_open() and event.type() in {QEvent.Type.FocusOut, QEvent.Type.Hide}:
+                return True
+        return super().eventFilter(editor, event)
 
     def paint(self, painter: QPainter, option, index):
         super().paint(painter, option, index)
@@ -341,6 +401,7 @@ class SmartDelegate(QStyledItemDelegate):
             ed.setMinimumHeight(option.fontMetrics.height() + self.EXTRA_VPAD)
             ed.clearRequested.connect(lambda: self.commitData.emit(ed))
             ed.clearRequested.connect(lambda: self.closeEditor.emit(ed, QStyledItemDelegate.EndEditHint.NoHint))
+            self._install_editor_event_filters(ed)
             return ed
 
         if ctype == "datetime":
@@ -348,6 +409,7 @@ class SmartDelegate(QStyledItemDelegate):
             ed.setMinimumHeight(option.fontMetrics.height() + self.EXTRA_VPAD)
             ed.clearRequested.connect(lambda: self.commitData.emit(ed))
             ed.clearRequested.connect(lambda: self.closeEditor.emit(ed, QStyledItemDelegate.EndEditHint.NoHint))
+            self._install_editor_event_filters(ed)
             return ed
 
         if ctype == "int":
@@ -357,18 +419,21 @@ class SmartDelegate(QStyledItemDelegate):
             else:
                 ed.setRange(-1_000_000_000, 1_000_000_000)
             ed.setMinimumHeight(option.fontMetrics.height() + self.EXTRA_VPAD)
+            self._install_editor_event_filters(ed)
             return ed
 
         if ctype == "bool":
             cb = QComboBox(parent)
             cb.addItems(["No", "Yes"])
             cb.setMinimumHeight(option.fontMetrics.height() + self.EXTRA_VPAD)
+            self._install_editor_event_filters(cb)
             return cb
 
         if ctype == "status" or self._is_status_column(index):
             cb = QComboBox(parent)
             cb.addItems(STATUSES)
             cb.setMinimumHeight(option.fontMetrics.height() + self.EXTRA_VPAD)
+            self._install_editor_event_filters(cb)
             return cb
 
         if ctype == "list":
@@ -376,9 +441,13 @@ class SmartDelegate(QStyledItemDelegate):
             cb.setEditable(True)
             cb.addItems(self._list_options(index))
             cb.setMinimumHeight(option.fontMetrics.height() + self.EXTRA_VPAD)
+            self._install_editor_event_filters(cb)
             return cb
 
-        return super().createEditor(parent, option, index)
+        ed = super().createEditor(parent, option, index)
+        if isinstance(ed, QWidget):
+            self._install_editor_event_filters(ed)
+        return ed
 
     def setEditorData(self, editor, index):
         ctype = self._col_type(index)

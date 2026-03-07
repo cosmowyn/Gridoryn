@@ -46,7 +46,9 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li>The <strong>task tree</strong> remains the central workspace for planning, editing, and reordering work.</li>
             <li><strong>Quick add</strong> captures tasks quickly with natural date and priority parsing.</li>
             <li><strong>Search, filters, saved views, and perspectives</strong> let you move between planning contexts quickly.</li>
+            <li><strong>Perspective buttons</strong> keep All, Today, Upcoming, Inbox, Someday, and Completed / Archive visible as first-class navigation targets.</li>
             <li><strong>Details, calendar, review, undo history, and analytics docks</strong> add depth without replacing the main tree workflow.</li>
+            <li><strong>Calendar double-click entry</strong> lets you create a dated task directly from the calendar and jump straight into editing.</li>
             <li><strong>Templates, recurrence, reminders, tags, attachments, backups, themes, and archive restore</strong> are integrated into the same database-backed workflow.</li>
         </ul>
         <p>Use the tree for immediate work, the details panel for deeper metadata, the command palette for fast keyboard actions, the review workflow for weekly cleanup, and analytics for lightweight trust-building metrics.</p>
@@ -183,7 +185,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
         <ul>
             <li>Type part of a command title, alias, or keyword to filter the list.</li>
             <li>Press <strong>Enter</strong> to run the selected command.</li>
-            <li>Commands include add task, add child, duplicate, archive, delete, open details, change status, change priority, apply saved views, jump to perspectives, insert templates, focus search or quick add, and open backup/theme import-export actions.</li>
+            <li>Commands include add task, add child, duplicate, archive, delete, open details, change status, change priority, apply saved views, go to perspectives such as <strong>Go to Inbox</strong>, insert templates, focus search or quick add, and open backup/theme import-export actions.</li>
             <li>The command list is extensible and includes dynamic entries such as saved views and saved templates.</li>
         </ul>
         <p>Use the palette when you know what you want to do but do not want to hunt through menus.</p>
@@ -212,6 +214,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><strong>Someday</strong>: deferred or non-active planned items.</li>
             <li><strong>Completed / Archive</strong>: done and archived content for cleanup or restoration.</li>
         </ul>
+        <p>The top navigation area includes a dedicated <strong>perspective button bar</strong> so the active perspective is always visible and highlighted.</p>
         <p><strong>Saved views</strong> persist the current search text and filter state so you can reload a named working context later.</p>
         <p><strong>Sort modes</strong>:</p>
         <ul>
@@ -262,6 +265,8 @@ HELP_CHAPTERS: list[HelpChapter] = [
             "date column",
             "list column",
             "calendar picker",
+            "radial time picker",
+            "clock dial",
             "clear date",
             "list values",
         ],
@@ -280,6 +285,8 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li>If a cell already has a value, the popup opens on that stored date.</li>
             <li>If a cell is empty, the popup defaults to <strong>today</strong> instead of a legacy zero date.</li>
             <li>The clear button removes the stored value completely.</li>
+            <li>The default <strong>Reminder</strong> datetime column uses a calendar for the date and a reusable <strong>radial clock dial</strong> for the time.</li>
+            <li>The radial dial supports click-to-jump, continuous wraparound, and alternating hour/minute selection for quick time entry.</li>
         </ul>
         <p><strong>List columns</strong>:</p>
         <ul>
@@ -400,12 +407,15 @@ HELP_CHAPTERS: list[HelpChapter] = [
             "priority 1",
             "reminder column",
             "grouped popup",
+            "clock dial",
+            "time picker",
         ],
         body_html="""
         <p>Reminders are local, persistent, and optional.</p>
         <ul>
             <li>Set a reminder directly from the Details panel or by editing the <strong>Reminder</strong> datetime column in the tree.</li>
             <li>Create reminders at an exact date/time or derive them from the due date using a minutes-before offset.</li>
+            <li>The tree reminder editor uses a <strong>radial clock-style time picker</strong> with a 24-hour display label and accept/cancel workflow.</li>
             <li>Reminder popups are <strong>grouped and sorted</strong> so multiple due items appear in a single dialog rather than separate spammy windows.</li>
             <li>Accepted reminders are marked as fired and do not come back unless rescheduled.</li>
             <li>Snoozing lets you choose a new date/time for the whole shown batch.</li>
@@ -462,12 +472,14 @@ HELP_CHAPTERS: list[HelpChapter] = [
             "markers",
             "due date",
             "day list",
+            "double click date",
+            "add task from calendar",
         ],
         body_html="""
         <p>The Calendar / Agenda dock provides a date-oriented view of scheduled work.</p>
         <ul>
             <li>The monthly calendar shows <strong>ISO week numbers</strong>.</li>
-            <li>Dates with tasks receive visual markers so work is visible before you click a day.</li>
+            <li>Dates with tasks receive a <strong>completion-colored background</strong> so scheduled work is visible before you click a day.</li>
             <li>Marker color follows completion state:
                 <ul>
                     <li>red for low completion</li>
@@ -476,6 +488,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
                 </ul>
             </li>
             <li>Select a date to populate the agenda list with tasks due on that day.</li>
+            <li><strong>Double-click a date</strong> in the calendar to create a new top-level task with that due date and immediately start editing its description in the tree.</li>
             <li>Activate an agenda item to jump focus back to the corresponding task in the tree.</li>
         </ul>
         """,

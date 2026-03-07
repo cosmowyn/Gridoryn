@@ -558,6 +558,196 @@ class Database:
         task["project_summary"] = self.project_health_for_task(int(task_id), stalled_days=14)
         return task
 
+    def fetch_task_snapshot(self, task_id: int) -> dict | None:
+        task = self.fetch_task_by_id(int(task_id))
+        if not task:
+            return None
+        task["attachments"] = self.fetch_attachments(int(task_id))
+        task["dependencies"] = [int(d["id"]) for d in self.fetch_dependencies(int(task_id))]
+        task["recurrence"] = self.get_recurrence_for_task(int(task_id))
+        return task
+
+    def fetch_subtree_task_ids(self, root_id: int) -> list[int]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            WITH RECURSIVE subtree(id) AS (
+                SELECT id FROM tasks WHERE id=?
+                UNION ALL
+                SELECT t.id
+                FROM tasks t
+                JOIN subtree s ON t.parent_id = s.id
+            )
+            SELECT id FROM subtree;
+            """,
+            (int(root_id),),
+        )
+        return [int(r["id"]) for r in cur.fetchall()]
+
+    def restore_task_snapshot(self, snapshot: dict):
+        if not snapshot or snapshot.get("id") is None:
+            return
+
+        tid = int(snapshot["id"])
+        recurrence = snapshot.get("recurrence") if isinstance(snapshot.get("recurrence"), dict) else None
+        recurrence_id = int(recurrence["id"]) if recurrence and recurrence.get("id") is not None else None
+        row_recurrence_rule_id = snapshot.get("recurrence_rule_id")
+        deps = []
+        for raw in snapshot.get("dependencies") or []:
+            try:
+                deps.append(int(raw["id"]) if isinstance(raw, dict) else int(raw))
+            except Exception:
+                continue
+
+        attachments = []
+        for att in snapshot.get("attachments") or []:
+            if not isinstance(att, dict):
+                continue
+            attachments.append(
+                {
+                    "path": str(att.get("path") or ""),
+                    "label": str(att.get("label") or ""),
+                    "created_at": str(att.get("created_at") or now_iso()),
+                }
+            )
+
+        custom_values = {}
+        for raw_key, value in (snapshot.get("custom") or {}).items():
+            try:
+                custom_values[int(raw_key)] = value
+            except Exception:
+                continue
+
+        with self.tx():
+            cur = self.conn.cursor()
+
+            cur.execute(
+                """
+                UPDATE tasks
+                SET description=?,
+                    due_date=?,
+                    last_update=?,
+                    priority=?,
+                    status=?,
+                    parent_id=?,
+                    sort_order=?,
+                    is_collapsed=?,
+                    notes=?,
+                    archived_at=?,
+                    planned_bucket=?,
+                    effort_minutes=?,
+                    actual_minutes=?,
+                    timer_started_at=?,
+                    waiting_for=?,
+                    recurrence_rule_id=?,
+                    recurrence_origin_task_id=?,
+                    is_generated_occurrence=?,
+                    reminder_at=?,
+                    reminder_minutes_before=?,
+                    reminder_fired_at=?
+                WHERE id=?;
+                """,
+                (
+                    str(snapshot.get("description") or ""),
+                    snapshot.get("due_date"),
+                    str(snapshot.get("last_update") or now_iso()),
+                    int(snapshot.get("priority") or 3),
+                    str(snapshot.get("status") or "Todo"),
+                    snapshot.get("parent_id"),
+                    int(snapshot.get("sort_order") or 0),
+                    int(snapshot.get("is_collapsed") or 0),
+                    str(snapshot.get("notes") or ""),
+                    snapshot.get("archived_at"),
+                    str(snapshot.get("planned_bucket") or "inbox"),
+                    snapshot.get("effort_minutes"),
+                    int(snapshot.get("actual_minutes") or 0),
+                    snapshot.get("timer_started_at"),
+                    snapshot.get("waiting_for"),
+                    row_recurrence_rule_id if recurrence_id is None else recurrence_id,
+                    snapshot.get("recurrence_origin_task_id"),
+                    int(snapshot.get("is_generated_occurrence") or 0),
+                    snapshot.get("reminder_at"),
+                    snapshot.get("reminder_minutes_before"),
+                    snapshot.get("reminder_fired_at"),
+                    tid,
+                ),
+            )
+
+            cur.execute("DELETE FROM task_custom_values WHERE task_id=?;", (tid,))
+            for col_id, value in custom_values.items():
+                cur.execute(
+                    """
+                    INSERT INTO task_custom_values(task_id, column_id, value)
+                    VALUES(?, ?, ?);
+                    """,
+                    (tid, int(col_id), value),
+                )
+
+            self._set_task_tags_tx(cur, tid, snapshot.get("tags") or [])
+
+            cur.execute("DELETE FROM task_dependencies WHERE task_id=?;", (tid,))
+            for dep_id in deps:
+                cur.execute(
+                    """
+                    INSERT INTO task_dependencies(task_id, depends_on_task_id)
+                    VALUES(?, ?)
+                    ON CONFLICT(task_id, depends_on_task_id) DO NOTHING;
+                    """,
+                    (tid, int(dep_id)),
+                )
+
+            cur.execute("DELETE FROM task_attachments WHERE task_id=?;", (tid,))
+            for att in attachments:
+                cur.execute(
+                    """
+                    INSERT INTO task_attachments(task_id, path, label, created_at)
+                    VALUES(?, ?, ?, ?);
+                    """,
+                    (tid, att["path"], att["label"], att["created_at"]),
+                )
+
+            cur.execute("DELETE FROM recurrence_rules WHERE task_id=?;", (tid,))
+            if recurrence and recurrence.get("frequency"):
+                if recurrence_id is not None:
+                    cur.execute(
+                        """
+                        INSERT INTO recurrence_rules(
+                            id, task_id, frequency, create_next_on_done, is_active, created_at, updated_at
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?);
+                        """,
+                        (
+                            recurrence_id,
+                            tid,
+                            str(recurrence.get("frequency") or ""),
+                            1 if int(recurrence.get("create_next_on_done") or 0) == 1 else 0,
+                            1 if int(recurrence.get("is_active") or 0) == 1 else 0,
+                            str(recurrence.get("created_at") or now_iso()),
+                            str(recurrence.get("updated_at") or now_iso()),
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO recurrence_rules(
+                            task_id, frequency, create_next_on_done, is_active, created_at, updated_at
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?);
+                        """,
+                        (
+                            tid,
+                            str(recurrence.get("frequency") or ""),
+                            1 if int(recurrence.get("create_next_on_done") or 0) == 1 else 0,
+                            1 if int(recurrence.get("is_active") or 0) == 1 else 0,
+                            str(recurrence.get("created_at") or now_iso()),
+                            str(recurrence.get("updated_at") or now_iso()),
+                        ),
+                    )
+                    cur.execute(
+                        "UPDATE tasks SET recurrence_rule_id=? WHERE id=?;",
+                        (int(cur.lastrowid), tid),
+                    )
+
     def next_sort_order(self, parent_id: int | None) -> int:
         cur = self.conn.cursor()
         cur.execute(
@@ -1521,6 +1711,19 @@ class Database:
             )
             cur.execute("UPDATE tasks SET last_update=? WHERE id=?;", (now_iso(), int(task_id)))
             return int(cur.lastrowid)
+
+    def fetch_attachment_by_id(self, attachment_id: int) -> dict | None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, task_id, path, label, created_at
+            FROM task_attachments
+            WHERE id=?;
+            """,
+            (int(attachment_id),),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
 
     def remove_attachment(self, attachment_id: int):
         with self.tx():

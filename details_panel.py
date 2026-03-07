@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-
-from PySide6.QtCore import Qt, QDateTime
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -15,13 +13,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QSpinBox,
     QCheckBox,
-    QDateTimeEdit,
     QPushButton,
     QHBoxLayout,
     QListWidget,
     QListWidgetItem,
 )
 
+from delegates import DateTimeEditorWithClear
 from model import PLANNED_BUCKETS, RECURRENCE_FREQUENCIES
 from ui_layout import add_form_row, add_left_aligned_buttons, configure_box_layout, configure_form_layout, configure_grid_layout
 
@@ -107,10 +105,7 @@ class TaskDetailsPanel(QWidget):
 
         rem_row = QHBoxLayout()
         configure_box_layout(rem_row)
-        self.reminder_at = QDateTimeEdit()
-        self.reminder_at.setCalendarPopup(True)
-        self.reminder_at.setDisplayFormat("dd-MMM-yyyy HH:mm")
-        self.reminder_at.setDateTime(QDateTime.currentDateTime())
+        self.reminder_at = DateTimeEditorWithClear()
         self.reminder_at.setToolTip("Reminder date/time for selected task.")
         rem_row.addWidget(self.reminder_at, 1)
 
@@ -207,6 +202,8 @@ class TaskDetailsPanel(QWidget):
             self.recurrence_next_on_done.setChecked(False)
             self.effort_minutes.setValue(-1)
             self.actual_minutes.setValue(0)
+            self.reminder_at.set_iso_datetime(None)
+            self.reminder_before_minutes.setValue(0)
             self.attachments.clear()
             return
 
@@ -266,14 +263,7 @@ class TaskDetailsPanel(QWidget):
         self.actual_minutes.setValue(max(0, _safe_int(details.get("actual_minutes"), 0)))
 
         reminder_at = str(details.get("reminder_at") or "").strip()
-        if reminder_at:
-            try:
-                dt = datetime.fromisoformat(reminder_at.replace("T", " "))
-                self.reminder_at.setDateTime(QDateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second))
-            except Exception:
-                self.reminder_at.setDateTime(QDateTime.currentDateTime())
-        else:
-            self.reminder_at.setDateTime(QDateTime.currentDateTime())
+        self.reminder_at.set_iso_datetime(reminder_at if reminder_at else None)
         self.reminder_before_minutes.setValue(max(0, _safe_int(details.get("reminder_minutes_before"), 0)))
 
         self.attachments.clear()
@@ -322,5 +312,5 @@ class TaskDetailsPanel(QWidget):
             "actual_minutes": int(self.actual_minutes.value()),
         }
 
-    def reminder_iso(self) -> str:
-        return self.reminder_at.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+    def reminder_iso(self) -> str | None:
+        return self.reminder_at.iso_datetime()

@@ -11,7 +11,8 @@ from PySide6.QtGui import QColor, QUndoStack, QIcon
 
 from commands import (
     AddTaskCommand, DeleteSubtreeCommand, EditCellCommand, MoveNodeCommand,
-    AddCustomColumnCommand, RemoveCustomColumnCommand
+    AddCustomColumnCommand, RemoveCustomColumnCommand,
+    TaskMutationCommand, TaskCollectionMutationCommand, CreateTasksFromPayloadCommand,
 )
 from theme import ThemeManager
 
@@ -353,12 +354,10 @@ class TaskTreeModel(QAbstractItemModel):
         out = []
 
         def walk(n: _Node):
-            t = dict(n.task)
-            t["custom"] = dict(n.task.get("custom") or {})
             tid = int(n.task["id"])
-            t["attachments"] = self.db.fetch_attachments(tid)
-            t["dependencies"] = [int(d["id"]) for d in self.db.fetch_dependencies(tid)]
-            out.append(t)
+            snap = self.db.fetch_task_snapshot(tid)
+            if snap is not None:
+                out.append(snap)
             for c in n.children:
                 walk(c)
 
@@ -798,12 +797,10 @@ class TaskTreeModel(QAbstractItemModel):
         self.undo_stack.push(DeleteSubtreeCommand(self, int(task_id)))
 
     def archive_task(self, task_id: int):
-        self.db.archive_task(int(task_id))
-        self.reload_all(reset_header_state=False)
+        self.archive_tasks([int(task_id)])
 
     def restore_task(self, task_id: int):
-        self.db.restore_task(int(task_id))
-        self.reload_all(reset_header_state=False)
+        self.restore_tasks([int(task_id)])
 
     def add_custom_column(self, name: str, col_type: str, list_values: list[str] | None = None):
         name = (name or "").strip()
@@ -856,64 +853,160 @@ class TaskTreeModel(QAbstractItemModel):
         return self.db.fetch_all_tags()
 
     def set_task_notes(self, task_id: int, notes: str):
-        self.db.update_task_field(int(task_id), "notes", str(notes or ""))
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Edit notes",
+                lambda: self.db.update_task_field(tid, "notes", str(notes or "")),
+            )
+        )
 
     def set_task_tags(self, task_id: int, tags):
-        self.db.set_task_tags(int(task_id), tags)
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        normalized = list(tags or [])
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Edit tags",
+                lambda: self.db.set_task_tags(tid, normalized),
+            )
+        )
 
     def set_task_bucket(self, task_id: int, bucket: str):
         b = str(bucket or "").strip().lower()
         if b not in PLANNED_BUCKETS:
             b = "inbox"
-        self.db.update_task_field(int(task_id), "planned_bucket", b)
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Change bucket",
+                lambda: self.db.update_task_field(tid, "planned_bucket", b),
+            )
+        )
 
     def set_task_waiting_for(self, task_id: int, waiting_for: str):
         text = str(waiting_for or "").strip()
-        self.db.update_task_field(int(task_id), "waiting_for", text if text else None)
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Edit waiting",
+                lambda: self.db.update_task_field(tid, "waiting_for", text if text else None),
+            )
+        )
 
     def set_task_dependencies(self, task_id: int, depends_on_ids: list[int]):
-        self.db.set_task_dependencies(int(task_id), depends_on_ids)
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        deps = [int(x) for x in depends_on_ids or []]
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Edit dependencies",
+                lambda: self.db.set_task_dependencies(tid, deps),
+            )
+        )
 
     def set_task_recurrence(self, task_id: int, frequency: str | None, create_next_on_done: bool):
-        self.db.set_recurrence_for_task(int(task_id), frequency, bool(create_next_on_done))
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        freq = str(frequency or "").strip().lower() or None
+        create_next = bool(create_next_on_done)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Edit recurrence",
+                lambda: self.db.set_recurrence_for_task(tid, freq, create_next),
+            )
+        )
 
     def set_task_effort_minutes(self, task_id: int, minutes: int | None):
         val = None if minutes is None else max(0, int(minutes))
-        self.db.update_task_field(int(task_id), "effort_minutes", val)
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Set estimate",
+                lambda: self.db.update_task_field(tid, "effort_minutes", val),
+            )
+        )
 
     def set_task_actual_minutes(self, task_id: int, minutes: int):
-        self.db.update_task_field(int(task_id), "actual_minutes", max(0, int(minutes)))
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        value = max(0, int(minutes))
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Set time spent",
+                lambda: self.db.update_task_field(tid, "actual_minutes", value),
+            )
+        )
 
     def start_task_timer(self, task_id: int):
-        self.db.start_timer(int(task_id))
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Start timer",
+                lambda: self.db.start_timer(tid),
+            )
+        )
 
     def stop_task_timer(self, task_id: int):
-        self.db.stop_timer(int(task_id))
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Stop timer",
+                lambda: self.db.stop_timer(tid),
+            )
+        )
 
     def set_task_reminder(self, task_id: int, reminder_at_iso: str | None, minutes_before: int | None = None):
-        self.db.set_task_reminder(int(task_id), reminder_at_iso, minutes_before)
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Set reminder",
+                lambda: self.db.set_task_reminder(tid, reminder_at_iso, minutes_before),
+            )
+        )
 
     def clear_task_reminder(self, task_id: int):
-        self.db.clear_task_reminder(int(task_id))
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Clear reminder",
+                lambda: self.db.clear_task_reminder(tid),
+            )
+        )
 
     def fetch_pending_reminders(self, limit: int = 20) -> list[dict]:
         return self.db.fetch_pending_reminders(limit=int(limit))
 
     def mark_reminder_fired(self, task_id: int):
-        self.db.mark_reminder_fired(int(task_id))
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Acknowledge reminder",
+                lambda: self.db.mark_reminder_fired(tid),
+            )
+        )
 
     def is_task_archived(self, task_id: int) -> bool:
         node = self.node_for_id(int(task_id))
@@ -946,12 +1039,33 @@ class TaskTreeModel(QAbstractItemModel):
         return self.db.fetch_analytics_summary(trend_days=int(trend_days), tag_days=int(tag_days))
 
     def add_attachment(self, task_id: int, path: str, label: str = ""):
-        self.db.add_attachment(int(task_id), path, label)
-        self._refresh_task_node_and_emit(int(task_id))
+        tid = int(task_id)
+        p = str(path or "").strip()
+        lbl = str(label or "")
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Add attachment",
+                lambda: self.db.add_attachment(tid, p, lbl),
+            )
+        )
 
     def remove_attachment(self, attachment_id: int):
-        self.db.remove_attachment(int(attachment_id))
-        self.reload_all(reset_header_state=False)
+        att = self.db.fetch_attachment_by_id(int(attachment_id))
+        if not att:
+            return
+        tid = int(att["task_id"])
+        aid = int(attachment_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Remove attachment",
+                lambda: self.db.remove_attachment(aid),
+                refresh_mode="reload",
+            )
+        )
 
     def list_saved_filter_views(self) -> list[dict]:
         return self.db.list_saved_filter_views()
@@ -966,22 +1080,50 @@ class TaskTreeModel(QAbstractItemModel):
         self.db.delete_filter_view(name)
 
     def archive_tasks(self, task_ids: list[int]):
-        for tid in task_ids:
-            self.db.archive_task(int(tid))
-        self.reload_all(reset_header_state=False)
+        roots = self._unique_task_ids(task_ids)
+        if not roots:
+            return
+        affected = self._expand_task_ids_with_subtrees(roots)
+        text = "Archive task" if len(roots) == 1 else "Archive tasks"
+        self.undo_stack.push(
+            TaskCollectionMutationCommand(
+                self,
+                affected,
+                text,
+                lambda: [self.db.archive_task(int(tid)) for tid in roots],
+                refresh_mode="reload",
+            )
+        )
 
     def restore_tasks(self, task_ids: list[int]):
-        for tid in task_ids:
-            self.db.restore_task(int(tid))
-        self.reload_all(reset_header_state=False)
+        roots = self._unique_task_ids(task_ids)
+        if not roots:
+            return
+        affected = self._expand_task_ids_with_subtrees(roots)
+        text = "Restore task" if len(roots) == 1 else "Restore tasks"
+        self.undo_stack.push(
+            TaskCollectionMutationCommand(
+                self,
+                affected,
+                text,
+                lambda: [self.db.restore_task(int(tid)) for tid in roots],
+                refresh_mode="reload",
+            )
+        )
 
     def hard_delete_tasks(self, task_ids: list[int]):
         ids = sorted({int(x) for x in task_ids if int(x) > 0})
         # Delete deepest nodes first to avoid duplicate subtree deletion work
         ids.sort(key=lambda tid: self._node_depth_from_top(self.node_for_id(tid)) if self.node_for_id(tid) else 0, reverse=True)
-        for tid in ids:
-            if self.node_for_id(tid):
-                self.delete_task(int(tid))
+        if not ids:
+            return
+        self.undo_stack.beginMacro("Delete permanently" if len(ids) == 1 else "Delete tasks permanently")
+        try:
+            for tid in ids:
+                if self.node_for_id(tid):
+                    self.delete_task(int(tid))
+        finally:
+            self.undo_stack.endMacro()
 
     def move_task_relative(self, task_id: int, delta: int) -> bool:
         node = self.node_for_id(int(task_id))
@@ -1001,65 +1143,22 @@ class TaskTreeModel(QAbstractItemModel):
         if not node or not node.task:
             return None
 
-        source_items = self.snapshot_subtree(int(task_id)) if include_children else [dict(node.task)]
+        source_items = self.snapshot_subtree(int(task_id)) if include_children else [self.db.fetch_task_snapshot(int(task_id))]
         if not source_items:
             return None
-
-        root_old_id = int(source_items[0]["id"])
-        root_parent_id = source_items[0].get("parent_id")
-        old_to_new: dict[int, int] = {}
-        first_new_id: int | None = None
-        dep_map: dict[int, list[int]] = {}
-
+        payload = {"tasks": []}
         for t in source_items:
-            old_id = int(t["id"])
-            dep_map[old_id] = [int(d["id"]) for d in self.db.fetch_dependencies(old_id)]
-
-            new_task = dict(t)
-            new_task.pop("id", None)
-            new_task["custom"] = {int(k): v for k, v in (t.get("custom") or {}).items()}
-            new_task["last_update"] = self._now_iso()
-            new_task["is_collapsed"] = 0
-            new_task["recurrence_rule_id"] = None
-            new_task["recurrence_origin_task_id"] = None
-            new_task["is_generated_occurrence"] = 0
-            new_task["reminder_at"] = None
-            new_task["reminder_minutes_before"] = None
-            new_task["reminder_fired_at"] = None
-
-            if old_id == root_old_id:
-                new_parent_id = root_parent_id
-            else:
-                if include_children:
-                    new_parent_id = old_to_new.get(int(t.get("parent_id")))
-                else:
-                    new_parent_id = root_parent_id
-            new_task["parent_id"] = new_parent_id
-            new_task["sort_order"] = self.db.next_sort_order(new_parent_id)
-
-            tags = list(t.get("tags") or [])
-            new_task["tags"] = tags
-
-            new_id = int(self.db.insert_task(new_task, keep_id=False))
-            old_to_new[old_id] = new_id
-            if first_new_id is None:
-                first_new_id = new_id
-
-            for att in self.db.fetch_attachments(old_id):
-                try:
-                    self.db.add_attachment(new_id, str(att.get("path") or ""), str(att.get("label") or ""))
-                except Exception:
-                    continue
-
-        # Rebind internal dependencies within duplicated subtree
-        for old_id, new_id in old_to_new.items():
-            old_deps = dep_map.get(old_id, [])
-            mapped = [old_to_new[d] for d in old_deps if d in old_to_new]
-            if mapped:
-                self.db.set_task_dependencies(new_id, mapped)
-
-        self.reload_all(reset_header_state=False)
-        return first_new_id
+            if not t:
+                continue
+            item = dict(t)
+            item["custom"] = {str(k): v for k, v in (t.get("custom") or {}).items()}
+            payload["tasks"].append(item)
+        if not payload["tasks"]:
+            return None
+        text = "Duplicate task" if not include_children else "Duplicate task with children"
+        cmd = CreateTasksFromPayloadCommand(self, payload, parent_id=payload["tasks"][0].get("parent_id"), text=text)
+        self.undo_stack.push(cmd)
+        return int(cmd.root_task_id) if cmd.root_task_id is not None else None
 
     def save_template_from_task(self, name: str, task_id: int):
         subtree = self.snapshot_subtree(int(task_id))
@@ -1083,6 +1182,122 @@ class TaskTreeModel(QAbstractItemModel):
         return self.db.load_template(name)
 
     def create_tasks_from_template_payload(self, payload: dict, parent_id: int | None = None) -> int | None:
+        cmd = CreateTasksFromPayloadCommand(self, payload, parent_id=parent_id, text="Insert template")
+        self.undo_stack.push(cmd)
+        return int(cmd.root_task_id) if cmd.root_task_id is not None else None
+
+    def create_tasks_from_template(self, name: str, parent_id: int | None = None) -> int | None:
+        payload = self.db.load_template(name)
+        return self.create_tasks_from_template_payload(payload, parent_id=parent_id)
+
+    def _refresh_task_node_and_emit(self, task_id: int):
+        node = self.node_for_id(int(task_id))
+        if node and node.task:
+            node.task = self.db.fetch_task_by_id(int(task_id))
+            idx0 = self._index_for_node(node, 0)
+            idx_last = self._index_for_node(node, self.columnCount() - 1)
+            if idx0.isValid() and idx_last.isValid():
+                self.dataChanged.emit(
+                    idx0,
+                    idx_last,
+                    [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.BackgroundRole, Qt.ItemDataRole.ForegroundRole],
+                )
+            if node.parent and node.parent.task:
+                pidx0 = self._index_for_node(node.parent, 0)
+                pidx_last = self._index_for_node(node.parent, self.columnCount() - 1)
+                if pidx0.isValid() and pidx_last.isValid():
+                    self.dataChanged.emit(
+                        pidx0,
+                        pidx_last,
+                        [Qt.ItemDataRole.DisplayRole],
+                    )
+        else:
+            self.reload_all(reset_header_state=False)
+
+    def _now_iso(self) -> str:
+        return datetime.now().replace(microsecond=0).isoformat(sep=" ")
+
+    # ---------- DB helpers used by commands ----------
+    def _db_insert_task(self, task: dict) -> int:
+        return self.db.insert_task(task, keep_id=False)
+
+    def _db_restore_task(self, task: dict):
+        self.db.insert_task(task, keep_id=True)
+
+    def _db_restore_subtree(self, subtree: list[dict]):
+        for t in subtree:
+            self.db.insert_task(t, keep_id=True)
+        for t in subtree:
+            self.db.restore_task_snapshot(t)
+        self.reload_all(reset_header_state=False)
+
+    def capture_task_snapshot(self, task_id: int) -> dict | None:
+        return self.db.fetch_task_snapshot(int(task_id))
+
+    def capture_task_snapshots(self, task_ids: list[int]) -> list[dict]:
+        out = []
+        seen = set()
+        for tid in task_ids or []:
+            try:
+                task_id = int(tid)
+            except Exception:
+                continue
+            if task_id <= 0 or task_id in seen:
+                continue
+            seen.add(task_id)
+            snap = self.capture_task_snapshot(task_id)
+            if snap is not None:
+                out.append(snap)
+        return out
+
+    def _restore_task_snapshots(self, snapshots: list[dict], reload: bool = False):
+        if not snapshots:
+            return
+        for snap in snapshots:
+            self.db.restore_task_snapshot(snap)
+        task_ids = [int(s["id"]) for s in snapshots if s and s.get("id") is not None]
+        self._refresh_after_task_mutation(task_ids, reload=bool(reload))
+
+    def _refresh_after_task_mutation(self, task_ids: list[int], reload: bool = False):
+        ids = self._unique_task_ids(task_ids)
+        if reload:
+            self.reload_all(reset_header_state=False)
+            return
+        changed_parent_ids = set()
+        for tid in ids:
+            node = self.node_for_id(int(tid))
+            if node and node.parent and node.parent.task:
+                changed_parent_ids.add(int(node.parent.task["id"]))
+            self._refresh_task_node_and_emit(int(tid))
+        for parent_id in changed_parent_ids:
+            self._refresh_task_node_and_emit(int(parent_id))
+
+    def _unique_task_ids(self, task_ids: list[int]) -> list[int]:
+        ids = []
+        seen = set()
+        for raw in task_ids or []:
+            try:
+                tid = int(raw)
+            except Exception:
+                continue
+            if tid <= 0 or tid in seen:
+                continue
+            seen.add(tid)
+            ids.append(tid)
+        return ids
+
+    def _expand_task_ids_with_subtrees(self, task_ids: list[int]) -> list[int]:
+        out = []
+        seen = set()
+        for tid in self._unique_task_ids(task_ids):
+            for child_id in self.db.fetch_subtree_task_ids(int(tid)):
+                if child_id in seen:
+                    continue
+                seen.add(child_id)
+                out.append(int(child_id))
+        return out
+
+    def _create_tasks_from_template_payload_now(self, payload: dict, parent_id: int | None = None) -> int | None:
         if not payload:
             return None
         tasks = payload.get("tasks") if isinstance(payload, dict) else None
@@ -1146,67 +1361,6 @@ class TaskTreeModel(QAbstractItemModel):
 
         self.reload_all(reset_header_state=False)
         return first_new
-
-    def create_tasks_from_template(self, name: str, parent_id: int | None = None) -> int | None:
-        payload = self.db.load_template(name)
-        return self.create_tasks_from_template_payload(payload, parent_id=parent_id)
-
-    def _refresh_task_node_and_emit(self, task_id: int):
-        node = self.node_for_id(int(task_id))
-        if node and node.task:
-            node.task = self.db.fetch_task_by_id(int(task_id))
-            idx0 = self._index_for_node(node, 0)
-            idx_last = self._index_for_node(node, self.columnCount() - 1)
-            if idx0.isValid() and idx_last.isValid():
-                self.dataChanged.emit(
-                    idx0,
-                    idx_last,
-                    [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.BackgroundRole, Qt.ItemDataRole.ForegroundRole],
-                )
-            if node.parent and node.parent.task:
-                pidx0 = self._index_for_node(node.parent, 0)
-                pidx_last = self._index_for_node(node.parent, self.columnCount() - 1)
-                if pidx0.isValid() and pidx_last.isValid():
-                    self.dataChanged.emit(
-                        pidx0,
-                        pidx_last,
-                        [Qt.ItemDataRole.DisplayRole],
-                    )
-        else:
-            self.reload_all(reset_header_state=False)
-
-    def _now_iso(self) -> str:
-        return datetime.now().replace(microsecond=0).isoformat(sep=" ")
-
-    # ---------- DB helpers used by commands ----------
-    def _db_insert_task(self, task: dict) -> int:
-        return self.db.insert_task(task, keep_id=False)
-
-    def _db_restore_task(self, task: dict):
-        self.db.insert_task(task, keep_id=True)
-
-    def _db_restore_subtree(self, subtree: list[dict]):
-        restored_ids = []
-        for t in subtree:
-            self.db.insert_task(t, keep_id=True)
-            restored_ids.append(int(t["id"]))
-            for att in t.get("attachments") or []:
-                try:
-                    self.db.add_attachment(int(t["id"]), str(att.get("path") or ""), str(att.get("label") or ""))
-                except Exception:
-                    continue
-        for t in subtree:
-            deps = []
-            for raw in (t.get("dependencies") or []):
-                try:
-                    dep_id = int(raw)
-                except Exception:
-                    continue
-                if dep_id in restored_ids:
-                    deps.append(dep_id)
-            if deps:
-                self.db.set_task_dependencies(int(t["id"]), deps)
-        self.reload_all(reset_header_state=False)
 
     # ---------- Collapse persistence helpers ----------
     def set_collapsed(self, task_id: int, collapsed: bool):
@@ -1315,16 +1469,15 @@ class TaskTreeModel(QAbstractItemModel):
             cc = self.custom_cols[col - len(self.core_cols)]
             self.db.update_custom_value(task_id, cc["id"], new_value)
 
-        generated_occurrence = False
+        generated_task_id = None
         if edited_key == "status":
             new_status = str(new_value or "")
             if old_status != "Done" and new_status == "Done":
-                next_id = self.db.maybe_create_next_recurrence(int(task_id))
-                generated_occurrence = next_id is not None
+                generated_task_id = self.db.maybe_create_next_recurrence(int(task_id))
 
-        if generated_occurrence:
+        if generated_task_id is not None:
             self.reload_all(reset_header_state=False)
-            return
+            return int(generated_task_id)
 
         node.task = self.db.fetch_task_by_id(task_id)
         auto_completed_parents: list[_Node] = []
@@ -1361,6 +1514,7 @@ class TaskTreeModel(QAbstractItemModel):
                 gpidx_last = self._index_for_node(pnode.parent, self.columnCount() - 1)
                 if gpidx0.isValid() and gpidx_last.isValid():
                     self.dataChanged.emit(gpidx0, gpidx_last, [Qt.ItemDataRole.DisplayRole])
+        return None
 
     def _model_move_node(self, task_id: int, new_parent_id: int | None, new_row: int):
         node = self.node_for_id(task_id)

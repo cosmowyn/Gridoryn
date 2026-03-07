@@ -12,10 +12,10 @@ from PySide6.QtCore import Qt, QTimer, QModelIndex, QEvent, QDateTime, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTreeView, QPushButton, QToolBar, QMenu, QMessageBox,
+    QTreeView, QPushButton, QToolBar, QMenu, QMessageBox, QAbstractItemView,
     QLineEdit, QDockWidget, QLabel, QToolButton, QComboBox, QInputDialog,
     QFileDialog, QListWidget, QListWidgetItem, QUndoView, QScrollArea,
-    QGridLayout, QGroupBox
+    QGridLayout, QGroupBox, QSizePolicy, QLayout
 )
 
 from app_paths import app_db_path
@@ -144,6 +144,22 @@ class MainWindow(QMainWindow):
             self.view_mode.addItem(title, key)
         self.view_mode.currentIndexChanged.connect(self._on_perspective_changed)
 
+        self._perspective_buttons: dict[str, QToolButton] = {}
+        self.perspective_bar = QWidget()
+        perspective_bar_layout = QHBoxLayout(self.perspective_bar)
+        configure_box_layout(perspective_bar_layout, margins=(0, 0, 0, 0), spacing=6)
+        for title, key in self._perspectives:
+            btn = QToolButton(self.perspective_bar)
+            btn.setObjectName("PerspectiveNavButton")
+            btn.setText(title)
+            btn.setCheckable(True)
+            btn.setAutoExclusive(True)
+            btn.setToolTip(f"Switch to the {title} perspective.")
+            btn.clicked.connect(lambda _checked=False, k=key: self._set_perspective_by_key(k))
+            self._perspective_buttons[key] = btn
+            perspective_bar_layout.addWidget(btn)
+        perspective_bar_layout.addStretch(1)
+
         self.sort_mode = QComboBox()
         for title, key in self._sort_modes:
             self.sort_mode.addItem(title, key)
@@ -152,6 +168,8 @@ class MainWindow(QMainWindow):
         control_h = max(26, self.fontMetrics().height() + 10)
         for w in (self.quick_add, self.view_mode, self.sort_mode):
             w.setMinimumHeight(control_h)
+        for btn in self._perspective_buttons.values():
+            btn.setMinimumHeight(control_h)
 
         # --- Search bar (above the view)
         self.search = QLineEdit()
@@ -196,6 +214,11 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(search_lbl, 1, 0)
         top_layout.addWidget(self.search, 1, 1, 1, 4)
         top_layout.addWidget(clear_btn, 1, 5)
+        perspective_lbl = QLabel("Perspectives")
+        perspective_lbl.setMinimumWidth(80)
+        perspective_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        top_layout.addWidget(perspective_lbl, 2, 0)
+        top_layout.addWidget(self.perspective_bar, 2, 1, 1, 5)
         top_layout.setColumnStretch(1, 1)
         top_layout.setColumnStretch(3, 0)
         top_layout.setColumnStretch(5, 0)
@@ -205,7 +228,7 @@ class MainWindow(QMainWindow):
         top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         top_scroll.setWidget(top_controls)
-        top_scroll.setMaximumHeight((control_h * 2) + 56)
+        top_scroll.setMaximumHeight((control_h * 3) + 74)
         v.addWidget(top_scroll, 0)
 
         self._row_gutter = QWidget()
@@ -274,6 +297,7 @@ class MainWindow(QMainWindow):
         self.model.dataChanged.connect(lambda *_: self._refresh_calendar_markers())
         self.model.rowsInserted.connect(lambda *_: self._refresh_calendar_markers())
         self.model.rowsRemoved.connect(lambda *_: self._refresh_calendar_markers())
+        self.undo_stack.indexChanged.connect(self._on_undo_stack_index_changed)
 
         # Timer to refresh due-date gradient + foreground contrast
         self._due_timer = QTimer(self)
@@ -319,6 +343,12 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.ToolTip and not self._tooltips_enabled:
             return True
+        if hasattr(self, "view") and obj in (self.view, self.view.viewport()) and event.type() == QEvent.Type.KeyPress:
+            if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
+                if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+                    if self.view.state() != QAbstractItemView.State.EditingState and self.view.currentIndex().isValid():
+                        self._edit_current_cell()
+                        return True
         if hasattr(self, "view") and obj in (self.view.viewport(), self.view):
             if event.type() in (QEvent.Type.Resize, QEvent.Type.Wheel, QEvent.Type.Move, QEvent.Type.Show):
                 QTimer.singleShot(0, self._update_row_action_buttons)
@@ -340,11 +370,15 @@ class MainWindow(QMainWindow):
                                 if p:
                                     paths.append(p)
                         if paths:
-                            for p in paths:
-                                try:
-                                    self.model.add_attachment(int(tid), p, "")
-                                except Exception:
-                                    continue
+                            self.model.undo_stack.beginMacro("Attach dropped files")
+                            try:
+                                for p in paths:
+                                    try:
+                                        self.model.add_attachment(int(tid), p, "")
+                                    except Exception:
+                                        continue
+                            finally:
+                                self.model.undo_stack.endMacro()
                             self._refresh_details_dock()
                     event.acceptProposedAction()
                     return True
@@ -539,15 +573,9 @@ class MainWindow(QMainWindow):
         self.filter_panel = FilterPanel(STATUSES, self)
         self.filter_panel.changed.connect(self._apply_filters)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setWidget(self.filter_panel)
-
         self.filter_dock = QDockWidget("Filters", self)
         self.filter_dock.setObjectName("FiltersDock")
-        self.filter_dock.setWidget(scroll)
+        self.filter_dock.setWidget(self._wrap_dock_content_scrollable(self.filter_panel, "FiltersDockScroll"))
         self.filter_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
 
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.filter_dock)
@@ -559,15 +587,9 @@ class MainWindow(QMainWindow):
     def _init_details_dock(self):
         self.details_panel = TaskDetailsPanel(self)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setWidget(self.details_panel)
-
         self.details_dock = QDockWidget("Details", self)
         self.details_dock.setObjectName("DetailsDock")
-        self.details_dock.setWidget(scroll)
+        self.details_dock.setWidget(self._wrap_dock_content_scrollable(self.details_panel, "DetailsDockScroll"))
         self.details_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.details_dock)
 
@@ -589,6 +611,8 @@ class MainWindow(QMainWindow):
     def _init_undo_history_dock(self):
         self.undo_view = QUndoView(self.undo_stack, self)
         self.undo_view.setObjectName("UndoHistoryView")
+        self.undo_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.undo_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.undo_dock = QDockWidget("Undo History", self)
         self.undo_dock.setObjectName("UndoHistoryDock")
         self.undo_dock.setWidget(self.undo_view)
@@ -611,7 +635,7 @@ class MainWindow(QMainWindow):
 
         self.review_dock = QDockWidget("Review Workflow", self)
         self.review_dock.setObjectName("ReviewDock")
-        self.review_dock.setWidget(self.review_panel)
+        self.review_dock.setWidget(self._wrap_dock_content_scrollable(self.review_panel, "ReviewDockScroll"))
         self.review_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.review_dock)
         self.review_dock.hide()
@@ -626,7 +650,7 @@ class MainWindow(QMainWindow):
 
         self.analytics_dock = QDockWidget("Analytics", self)
         self.analytics_dock.setObjectName("AnalyticsDock")
-        self.analytics_dock.setWidget(self.analytics_panel)
+        self.analytics_dock.setWidget(self._wrap_dock_content_scrollable(self.analytics_panel, "AnalyticsDockScroll"))
         self.analytics_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.analytics_dock)
         self.analytics_dock.hide()
@@ -647,6 +671,7 @@ class MainWindow(QMainWindow):
         self.calendar.setGridVisible(True)
         self.calendar.setVerticalHeaderFormat(self.calendar.VerticalHeaderFormat.ISOWeekNumbers)
         self.calendar.selectionChanged.connect(self._refresh_calendar_list)
+        self.calendar.activated.connect(self._on_calendar_date_activated)
         self.calendar.currentPageChanged.connect(lambda *_: self._refresh_calendar_markers())
         calendar_layout.addWidget(self.calendar)
         v.addWidget(calendar_group)
@@ -664,13 +689,33 @@ class MainWindow(QMainWindow):
 
         self.calendar_dock = QDockWidget("Calendar / Agenda", self)
         self.calendar_dock.setObjectName("CalendarDock")
-        self.calendar_dock.setWidget(wrap)
+        self.calendar_dock.setWidget(self._wrap_dock_content_scrollable(wrap, "CalendarDockScroll"))
         self.calendar_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.calendar_dock)
         self.calendar_dock.hide()
         self.calendar_dock.visibilityChanged.connect(
             lambda vis: self._toggle_calendar_act.setChecked(bool(vis)) if hasattr(self, "_toggle_calendar_act") else None
         )
+
+    def _wrap_dock_content_scrollable(self, content: QWidget, object_name: str) -> QScrollArea:
+        layout = content.layout()
+        if layout is not None:
+            layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        try:
+            min_width = max(content.minimumSizeHint().width(), content.sizeHint().width())
+        except Exception:
+            min_width = content.minimumWidth()
+        if int(min_width or 0) > 0:
+            content.setMinimumWidth(int(min_width))
+        content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
+        scroll = QScrollArea()
+        scroll.setObjectName(object_name)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(content)
+        return scroll
 
     def _refresh_details_dock(self):
         tid = self._selected_task_id()
@@ -685,18 +730,22 @@ class MainWindow(QMainWindow):
         if tid is None:
             return
         payload = self.details_panel.collect_payload()
-        self.model.set_task_notes(int(tid), payload["notes"])
-        self.model.set_task_tags(int(tid), payload["tags"])
-        self.model.set_task_bucket(int(tid), payload["bucket"])
-        self.model.set_task_waiting_for(int(tid), payload["waiting_for"])
-        self.model.set_task_dependencies(int(tid), payload["dependencies"])
-        self.model.set_task_recurrence(
-            int(tid),
-            payload["recurrence"],
-            bool(payload["recurrence_next_on_done"]),
-        )
-        self.model.set_task_effort_minutes(int(tid), payload["effort_minutes"])
-        self.model.set_task_actual_minutes(int(tid), payload["actual_minutes"])
+        self.model.undo_stack.beginMacro("Update task details")
+        try:
+            self.model.set_task_notes(int(tid), payload["notes"])
+            self.model.set_task_tags(int(tid), payload["tags"])
+            self.model.set_task_bucket(int(tid), payload["bucket"])
+            self.model.set_task_waiting_for(int(tid), payload["waiting_for"])
+            self.model.set_task_dependencies(int(tid), payload["dependencies"])
+            self.model.set_task_recurrence(
+                int(tid),
+                payload["recurrence"],
+                bool(payload["recurrence_next_on_done"]),
+            )
+            self.model.set_task_effort_minutes(int(tid), payload["effort_minutes"])
+            self.model.set_task_actual_minutes(int(tid), payload["actual_minutes"])
+        finally:
+            self.model.undo_stack.endMacro()
         self._refresh_details_dock()
         self._refresh_calendar_list()
 
@@ -758,11 +807,15 @@ class MainWindow(QMainWindow):
         paths, _ = QFileDialog.getOpenFileNames(self, "Select files to attach")
         if not paths:
             return
-        for p in paths:
-            try:
-                self.model.add_attachment(int(tid), p, "")
-            except Exception:
-                continue
+        self.model.undo_stack.beginMacro("Attach files")
+        try:
+            for p in paths:
+                try:
+                    self.model.add_attachment(int(tid), p, "")
+                except Exception:
+                    continue
+        finally:
+            self.model.undo_stack.endMacro()
         self._refresh_details_dock()
 
     def _details_add_folder_attachment(self):
@@ -814,6 +867,14 @@ class MainWindow(QMainWindow):
         except Exception:
             self.calendar.set_completion_summary({})
 
+    def _on_undo_stack_index_changed(self, _index: int):
+        self._refresh_details_dock()
+        self._refresh_calendar_list()
+        self._refresh_calendar_markers()
+        self._refresh_review_panel()
+        self._refresh_analytics_panel()
+        QTimer.singleShot(0, self._update_row_action_buttons)
+
     def _refresh_calendar_list(self):
         if not hasattr(self, "calendar_list"):
             return
@@ -834,6 +895,63 @@ class MainWindow(QMainWindow):
         except Exception:
             return
         self._focus_task_by_id(tid)
+
+    def _calendar_bucket_for_date(self, qdate):
+        try:
+            selected = date(qdate.year(), qdate.month(), qdate.day())
+        except Exception:
+            return "inbox"
+        today = date.today()
+        if selected == today:
+            return "today"
+        if selected > today:
+            return "upcoming"
+        return "inbox"
+
+    def _focus_and_edit_task_by_id(self, task_id: int, allow_perspective_fallback: bool = False) -> bool:
+        src = self._source_index_for_task_id(int(task_id), 0)
+        if not src.isValid():
+            return False
+        pidx = self.proxy.mapFromSource(src)
+        if not pidx.isValid() and allow_perspective_fallback:
+            self._set_perspective_by_key("all")
+            pidx = self.proxy.mapFromSource(src)
+        if not pidx.isValid():
+            return False
+        self.view.setCurrentIndex(pidx)
+        self.view.scrollTo(pidx)
+        QTimer.singleShot(0, self._edit_current_cell)
+        return True
+
+    def _on_calendar_date_activated(self, qdate):
+        if not qdate or not qdate.isValid():
+            return
+        due_iso = qdate.toString("yyyy-MM-dd")
+        bucket = self._calendar_bucket_for_date(qdate)
+        ok = self.model.add_task_with_values(
+            description="",
+            due_date=due_iso,
+            priority=None,
+            parent_id=None,
+            planned_bucket=bucket,
+        )
+        if not ok:
+            return
+        self.calendar.setSelectedDate(qdate)
+        self._refresh_calendar_list()
+        new_id = self.model.last_added_task_id()
+        if new_id is None:
+            return
+
+        def _finish_focus():
+            if self._focus_and_edit_task_by_id(int(new_id), allow_perspective_fallback=True):
+                return
+            self.statusBar().showMessage(
+                "Task created from calendar, but hidden by the current filters.",
+                4000,
+            )
+
+        QTimer.singleShot(0, _finish_focus)
 
     def _refresh_review_panel(
         self,
@@ -985,26 +1103,34 @@ class MainWindow(QMainWindow):
 
             action = dlg.action()
             if action == ReminderBatchDialog.ACTION_ACK:
-                for r in pending:
-                    try:
-                        self.model.mark_reminder_fired(int(r["id"]))
-                    except Exception:
-                        continue
+                self.model.undo_stack.beginMacro("Acknowledge reminders")
+                try:
+                    for r in pending:
+                        try:
+                            self.model.mark_reminder_fired(int(r["id"]))
+                        except Exception:
+                            continue
+                finally:
+                    self.model.undo_stack.endMacro()
                 self._reminder_prompt_cooldown_until = None
                 return
 
             if action == ReminderBatchDialog.ACTION_SNOOZE:
                 snooze_iso = dlg.snooze_iso()
-                for r in pending:
-                    try:
-                        mins = r.get("reminder_minutes_before")
-                        mins = int(mins) if mins is not None else None
-                    except Exception:
-                        mins = None
-                    try:
-                        self.model.set_task_reminder(int(r["id"]), snooze_iso, mins)
-                    except Exception:
-                        continue
+                self.model.undo_stack.beginMacro("Snooze reminders")
+                try:
+                    for r in pending:
+                        try:
+                            mins = r.get("reminder_minutes_before")
+                            mins = int(mins) if mins is not None else None
+                        except Exception:
+                            mins = None
+                        try:
+                            self.model.set_task_reminder(int(r["id"]), snooze_iso, mins)
+                        except Exception:
+                            continue
+                finally:
+                    self.model.undo_stack.endMacro()
                 self._reminder_prompt_cooldown_until = None
                 return
             self._reminder_prompt_cooldown_until = datetime.now() + timedelta(minutes=2)
@@ -1274,7 +1400,7 @@ class MainWindow(QMainWindow):
             commands.append(
                 PaletteCommand(
                     f"perspective.{key}",
-                    f"Jump to {label}",
+                    f"Go to {label}",
                     "Switch active perspective",
                     ("view", "perspective"),
                     lambda k=key: self._set_perspective_by_key(k),
@@ -1563,12 +1689,12 @@ class MainWindow(QMainWindow):
         # Keyboard-first workflow shortcuts.
         edit_current_act = QAction("Edit current", self)
         edit_current_act.setShortcut(QKeySequence(Qt.Key.Key_Return))
-        edit_current_act.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        edit_current_act.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         edit_current_act.triggered.connect(self._edit_current_cell)
 
         edit_current_numpad_act = QAction("Edit current (numpad)", self)
         edit_current_numpad_act.setShortcut(QKeySequence(Qt.Key.Key_Enter))
-        edit_current_numpad_act.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        edit_current_numpad_act.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         edit_current_numpad_act.triggered.connect(self._edit_current_cell)
 
         toggle_expand_act = QAction("Toggle expand/collapse", self)
@@ -1997,11 +2123,57 @@ class MainWindow(QMainWindow):
                 ids = [int(tid)]
         return ids
 
+    def _neighbor_task_id_before_removal(self, removed_ids: list[int]) -> int | None:
+        current = self._selected_proxy_index()
+        if not current:
+            return None
+        removed = {int(x) for x in removed_ids if int(x) > 0}
+        probe = current.siblingAtColumn(0)
+
+        def _task_id_for_proxy_index(pidx: QModelIndex) -> int | None:
+            if not pidx.isValid():
+                return None
+            src = self.proxy.mapToSource(pidx)
+            tid = self.model.task_id_from_index(src)
+            return int(tid) if tid is not None else None
+
+        above = probe
+        while True:
+            above = self.view.indexAbove(above)
+            if not above.isValid():
+                break
+            tid = _task_id_for_proxy_index(above)
+            if tid is not None and tid not in removed:
+                return tid
+
+        below = probe
+        while True:
+            below = self.view.indexBelow(below)
+            if not below.isValid():
+                break
+            tid = _task_id_for_proxy_index(below)
+            if tid is not None and tid not in removed:
+                return tid
+
+        return None
+
+    def _restore_focus_after_removal(self, task_id: int | None):
+        if task_id is not None:
+            self._focus_task_by_id(int(task_id))
+            if self._selected_task_id() == int(task_id):
+                return
+        first = self.proxy.index(0, 0)
+        if first.isValid():
+            self.view.setCurrentIndex(first)
+            self.view.scrollTo(first)
+
     def _archive_selected(self):
         ids = self._selected_task_ids()
         if not ids:
             return
+        focus_task_id = self._neighbor_task_id_before_removal(ids)
         self.model.archive_tasks(ids)
+        QTimer.singleShot(0, lambda tid=focus_task_id: self._restore_focus_after_removal(tid))
         self._refresh_details_dock()
         self._refresh_calendar_list()
 
@@ -2048,7 +2220,9 @@ class MainWindow(QMainWindow):
         )
         if res != QMessageBox.StandardButton.Yes:
             return
+        focus_task_id = self._neighbor_task_id_before_removal(ids)
         self.model.hard_delete_tasks(ids)
+        QTimer.singleShot(0, lambda tid=focus_task_id: self._restore_focus_after_removal(tid))
         self._refresh_details_dock()
         self._refresh_calendar_list()
 
@@ -2078,16 +2252,26 @@ class MainWindow(QMainWindow):
         for i in range(self.view_mode.count()):
             if self.view_mode.itemData(i) == key:
                 self.view_mode.setCurrentIndex(i)
+                self._sync_perspective_buttons(key)
                 return
         self.view_mode.setCurrentIndex(0)
+        self._sync_perspective_buttons("all")
 
     def _on_perspective_changed(self, *_):
         key = str(self.view_mode.currentData() or "all")
         self.proxy.set_perspective(key)
+        self._sync_perspective_buttons(key)
         self.model.settings.setValue("ui/perspective", key)
         self._update_dragdrop_mode()
         self._refresh_calendar_list()
         QTimer.singleShot(0, self._update_row_action_buttons)
+
+    def _sync_perspective_buttons(self, active_key: str):
+        buttons = getattr(self, "_perspective_buttons", {})
+        for key, btn in buttons.items():
+            was_blocked = btn.blockSignals(True)
+            btn.setChecked(str(key) == str(active_key))
+            btn.blockSignals(was_blocked)
 
     def _set_sort_mode_by_key(self, key: str):
         for i in range(self.sort_mode.count()):
@@ -2129,6 +2313,8 @@ class MainWindow(QMainWindow):
         self.view.scrollTo(pidx)
 
     def _edit_current_cell(self):
+        if self.view.state() == QAbstractItemView.State.EditingState:
+            return
         idx = self.view.currentIndex()
         if idx.isValid():
             self.view.edit(idx)
@@ -2272,15 +2458,19 @@ class MainWindow(QMainWindow):
             tags_to_add = [x.strip() for x in str(value or "").split(",") if x.strip()]
             if not tags_to_add:
                 return
-            for tid in ids:
-                details = self.model.task_details(int(tid)) or {}
-                existing = list(details.get("tags") or [])
-                merged = existing[:]
-                lower = {x.lower() for x in existing}
-                for t in tags_to_add:
-                    if t.lower() not in lower:
-                        merged.append(t)
-                self.model.set_task_tags(int(tid), merged)
+            self.model.undo_stack.beginMacro("Bulk add tags")
+            try:
+                for tid in ids:
+                    details = self.model.task_details(int(tid)) or {}
+                    existing = list(details.get("tags") or [])
+                    merged = existing[:]
+                    lower = {x.lower() for x in existing}
+                    for t in tags_to_add:
+                        if t.lower() not in lower:
+                            merged.append(t)
+                    self.model.set_task_tags(int(tid), merged)
+            finally:
+                self.model.undo_stack.endMacro()
             return
 
         if op == "Remove tags":
@@ -2290,11 +2480,15 @@ class MainWindow(QMainWindow):
             tags_to_remove = {x.strip().lower() for x in str(value or "").split(",") if x.strip()}
             if not tags_to_remove:
                 return
-            for tid in ids:
-                details = self.model.task_details(int(tid)) or {}
-                existing = list(details.get("tags") or [])
-                keep = [x for x in existing if x.lower() not in tags_to_remove]
-                self.model.set_task_tags(int(tid), keep)
+            self.model.undo_stack.beginMacro("Bulk remove tags")
+            try:
+                for tid in ids:
+                    details = self.model.task_details(int(tid)) or {}
+                    existing = list(details.get("tags") or [])
+                    keep = [x for x in existing if x.lower() not in tags_to_remove]
+                    self.model.set_task_tags(int(tid), keep)
+            finally:
+                self.model.undo_stack.endMacro()
             return
 
         if op == "Archive":

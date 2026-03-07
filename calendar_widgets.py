@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QPoint, QDate
+from PySide6.QtCore import QDate
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QCalendarWidget
 
 
 class TaskCalendarWidget(QCalendarWidget):
-    """Calendar that renders date markers for due tasks with completion coloring."""
+    """Calendar that renders due-task dates with completion-colored backgrounds."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -48,10 +48,5 @@ class TaskCalendarWidget(QCalendarWidget):
         fill = QColor(color)
         fill.setAlpha(36)
         painter.fillRect(rect.adjusted(1, 1, -1, -1), fill)
-
-        dot_center = QPoint(rect.center().x(), rect.bottom() - 4)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(color)
-        painter.drawEllipse(dot_center, 3, 3)
 
         painter.restore()

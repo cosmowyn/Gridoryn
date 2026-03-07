@@ -108,6 +108,7 @@ class SettingsDialog(QDialog):
         self._build_tree_group()
         self._build_buttons_group()
         self._build_inputs_group()
+        self._build_clock_group()
         self._build_selection_group()
         self._build_border_groups()
         self._build_advanced_group()
@@ -366,6 +367,36 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Border", self.input_border_btn)
         g.layout().addRow("Focus border", self.input_focus_border_btn)
 
+    def _build_clock_group(self):
+        g = self._mk_group("Clock widget colors")
+
+        self.clock_face_bg_btn = QPushButton()
+        self.clock_face_border_btn = QPushButton()
+        self.clock_text_btn = QPushButton()
+        self.clock_tick_btn = QPushButton()
+        self.clock_hand_btn = QPushButton()
+        self.clock_accent_btn = QPushButton()
+        self.clock_accent_text_btn = QPushButton()
+        self.clock_center_dot_btn = QPushButton()
+
+        self.clock_face_bg_btn.clicked.connect(lambda: self._color_pick("clock_face_bg", self.clock_face_bg_btn))
+        self.clock_face_border_btn.clicked.connect(lambda: self._color_pick("clock_face_border", self.clock_face_border_btn))
+        self.clock_text_btn.clicked.connect(lambda: self._color_pick("clock_text", self.clock_text_btn))
+        self.clock_tick_btn.clicked.connect(lambda: self._color_pick("clock_tick", self.clock_tick_btn))
+        self.clock_hand_btn.clicked.connect(lambda: self._color_pick("clock_hand", self.clock_hand_btn))
+        self.clock_accent_btn.clicked.connect(lambda: self._color_pick("clock_accent", self.clock_accent_btn))
+        self.clock_accent_text_btn.clicked.connect(lambda: self._color_pick("clock_accent_text", self.clock_accent_text_btn))
+        self.clock_center_dot_btn.clicked.connect(lambda: self._color_pick("clock_center_dot", self.clock_center_dot_btn))
+
+        g.layout().addRow("Clock face background", self.clock_face_bg_btn)
+        g.layout().addRow("Clock face border", self.clock_face_border_btn)
+        g.layout().addRow("Clock numbers", self.clock_text_btn)
+        g.layout().addRow("Minute tick marks", self.clock_tick_btn)
+        g.layout().addRow("Clock hand", self.clock_hand_btn)
+        g.layout().addRow("Selected value fill", self.clock_accent_btn)
+        g.layout().addRow("Selected value text", self.clock_accent_text_btn)
+        g.layout().addRow("Center dot", self.clock_center_dot_btn)
+
     def _build_selection_group(self):
         g = self._mk_group("Selection colors")
         self.sel_bg_btn = QPushButton()
@@ -579,6 +610,15 @@ class SettingsDialog(QDialog):
         _set_color_btn(self.input_fg_btn, c["input_fg"])
         _set_color_btn(self.input_border_btn, c["input_border"])
         _set_color_btn(self.input_focus_border_btn, c["input_focus_border"])
+
+        _set_color_btn(self.clock_face_bg_btn, c["clock_face_bg"])
+        _set_color_btn(self.clock_face_border_btn, c["clock_face_border"])
+        _set_color_btn(self.clock_text_btn, c["clock_text"])
+        _set_color_btn(self.clock_tick_btn, c["clock_tick"])
+        _set_color_btn(self.clock_hand_btn, c["clock_hand"])
+        _set_color_btn(self.clock_accent_btn, c["clock_accent"])
+        _set_color_btn(self.clock_accent_text_btn, c["clock_accent_text"])
+        _set_color_btn(self.clock_center_dot_btn, c["clock_center_dot"])
 
         _set_color_btn(self.sel_bg_btn, c["sel_bg"])
         _set_color_btn(self.sel_fg_btn, c["sel_fg"])
