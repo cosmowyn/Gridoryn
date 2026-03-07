@@ -4,8 +4,10 @@ from datetime import date
 from PySide6.QtCore import Signal, Qt, QDate
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QHBoxLayout, QCheckBox, QLabel,
-    QSpinBox, QDateEdit, QPushButton, QLineEdit
+    QSpinBox, QDateEdit, QPushButton, QLineEdit, QFormLayout
 )
+
+from ui_layout import add_form_row, add_left_aligned_buttons, configure_box_layout, configure_form_layout
 
 
 class FilterPanel(QWidget):
@@ -21,8 +23,7 @@ class FilterPanel(QWidget):
         self._statuses = statuses
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(10)
+        configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
 
         # --- Status group (multi-select)
         g_status = QGroupBox("Status")
@@ -47,7 +48,8 @@ class FilterPanel(QWidget):
 
         # --- Priority group
         g_prio = QGroupBox("Priority range")
-        h_prio = QHBoxLayout(g_prio)
+        h_prio = QFormLayout(g_prio)
+        configure_form_layout(h_prio, label_width=110)
 
         self.prio_min = QSpinBox()
         self.prio_min.setRange(1, 5)
@@ -61,17 +63,15 @@ class FilterPanel(QWidget):
         self.prio_max.setToolTip("Maximum allowed priority for visible tasks.")
         self.prio_max.valueChanged.connect(self._emit_changed)
 
-        h_prio.addWidget(QLabel("Min"))
-        h_prio.addWidget(self.prio_min)
-        h_prio.addSpacing(10)
-        h_prio.addWidget(QLabel("Max"))
-        h_prio.addWidget(self.prio_max)
+        add_form_row(h_prio, "Minimum", self.prio_min)
+        add_form_row(h_prio, "Maximum", self.prio_max)
 
         root.addWidget(g_prio)
 
         # --- Due range group
         g_due = QGroupBox("Due date range")
         v_due = QVBoxLayout(g_due)
+        configure_box_layout(v_due)
 
         self.chk_due_range = QCheckBox("Enable due range")
         self.chk_due_range.setChecked(False)
@@ -79,29 +79,24 @@ class FilterPanel(QWidget):
         self.chk_due_range.stateChanged.connect(self._emit_changed)
         v_due.addWidget(self.chk_due_range)
 
-        row1 = QHBoxLayout()
+        due_form = QFormLayout()
+        configure_form_layout(due_form, label_width=80)
         self.due_from = QDateEdit()
         self.due_from.setCalendarPopup(True)
         self.due_from.setDisplayFormat("dd-MMM-yyyy")
         self.due_from.setDate(QDate.currentDate())
         self.due_from.setToolTip("Start date for due-date filter range.")
         self.due_from.dateChanged.connect(self._emit_changed)
+        add_form_row(due_form, "From", self.due_from)
 
-        row1.addWidget(QLabel("From"))
-        row1.addWidget(self.due_from)
-        v_due.addLayout(row1)
-
-        row2 = QHBoxLayout()
         self.due_to = QDateEdit()
         self.due_to.setCalendarPopup(True)
         self.due_to.setDisplayFormat("dd-MMM-yyyy")
         self.due_to.setDate(QDate.currentDate().addDays(30))
         self.due_to.setToolTip("End date for due-date filter range.")
         self.due_to.dateChanged.connect(self._emit_changed)
-
-        row2.addWidget(QLabel("To"))
-        row2.addWidget(self.due_to)
-        v_due.addLayout(row2)
+        add_form_row(due_form, "To", self.due_to)
+        v_due.addLayout(due_form)
 
         root.addWidget(g_due)
 
@@ -149,10 +144,12 @@ class FilterPanel(QWidget):
         root.addWidget(g_tags)
 
         # --- Reset
+        reset_row = QHBoxLayout()
         self.btn_reset = QPushButton("Reset filters")
         self.btn_reset.setToolTip("Reset all filter options to defaults.")
         self.btn_reset.clicked.connect(self.reset)
-        root.addWidget(self.btn_reset)
+        add_left_aligned_buttons(reset_row, self.btn_reset)
+        root.addLayout(reset_row)
 
         root.addStretch(1)
 

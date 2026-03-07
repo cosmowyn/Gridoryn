@@ -7,6 +7,8 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QFormLayout,
+    QGridLayout,
+    QGroupBox,
     QLabel,
     QPlainTextEdit,
     QLineEdit,
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from model import PLANNED_BUCKETS, RECURRENCE_FREQUENCIES
+from ui_layout import add_form_row, add_left_aligned_buttons, configure_box_layout, configure_form_layout, configure_grid_layout
 
 
 def _safe_int(value, default=0):
@@ -37,8 +40,7 @@ class TaskDetailsPanel(QWidget):
         self._task_id: int | None = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(8)
+        configure_box_layout(root, margins=(8, 8, 8, 8), spacing=10)
 
         self.meta = QLabel("No task selected")
         self.meta.setWordWrap(True)
@@ -46,8 +48,13 @@ class TaskDetailsPanel(QWidget):
         self.meta.setToolTip("Read-only summary of selected task and progress.")
         root.addWidget(self.meta)
 
+        editor_group = QGroupBox("Task details")
+        editor_layout = QVBoxLayout(editor_group)
+        configure_box_layout(editor_layout)
         form = QFormLayout()
-        root.addLayout(form)
+        configure_form_layout(form, label_width=130)
+        editor_layout.addLayout(form)
+        root.addWidget(editor_group)
 
         self.notes = QPlainTextEdit()
         self.notes.setPlaceholderText("Task notes...")
@@ -55,50 +62,51 @@ class TaskDetailsPanel(QWidget):
         self.notes.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.notes.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.notes.setToolTip("Long-form notes for selected task.")
-        form.addRow("Notes", self.notes)
+        add_form_row(form, "Notes", self.notes)
 
         self.tags = QLineEdit()
         self.tags.setPlaceholderText("Comma-separated tags")
         self.tags.setToolTip("Tags for selected task, separated by commas.")
-        form.addRow("Tags", self.tags)
+        add_form_row(form, "Tags", self.tags)
 
         self.bucket = QComboBox()
         self.bucket.addItems(PLANNED_BUCKETS)
         self.bucket.setToolTip("Planning bucket used by built-in perspectives.")
-        form.addRow("Bucket", self.bucket)
+        add_form_row(form, "Bucket", self.bucket)
 
         self.waiting_for = QLineEdit()
         self.waiting_for.setPlaceholderText("Waiting for (optional)")
         self.waiting_for.setToolTip("Optional waiting context, person, or external dependency note.")
-        form.addRow("Waiting", self.waiting_for)
+        add_form_row(form, "Waiting", self.waiting_for)
 
         self.depends_on = QLineEdit()
         self.depends_on.setPlaceholderText("Dependency task IDs (comma-separated)")
         self.depends_on.setToolTip("Task IDs that block this task (comma-separated).")
-        form.addRow("Blocked by IDs", self.depends_on)
+        add_form_row(form, "Blocked by IDs", self.depends_on)
 
         self.recurrence = QComboBox()
         self.recurrence.addItem("(none)")
         self.recurrence.addItems(RECURRENCE_FREQUENCIES)
         self.recurrence.setToolTip("Recurring schedule frequency.")
-        form.addRow("Recurrence", self.recurrence)
+        add_form_row(form, "Recurrence", self.recurrence)
 
         self.recurrence_next_on_done = QCheckBox("Create next occurrence when done")
         self.recurrence_next_on_done.setToolTip("When enabled, next occurrence is generated after marking current task Done.")
-        form.addRow("", self.recurrence_next_on_done)
+        add_form_row(form, "", self.recurrence_next_on_done)
 
         self.effort_minutes = QSpinBox()
         self.effort_minutes.setRange(-1, 1_000_000)
         self.effort_minutes.setSpecialValueText("None")
         self.effort_minutes.setToolTip("Estimated effort in minutes. Use None if not estimated.")
-        form.addRow("Est. minutes", self.effort_minutes)
+        add_form_row(form, "Est. minutes", self.effort_minutes)
 
         self.actual_minutes = QSpinBox()
         self.actual_minutes.setRange(0, 1_000_000)
         self.actual_minutes.setToolTip("Actual effort in minutes.")
-        form.addRow("Actual minutes", self.actual_minutes)
+        add_form_row(form, "Actual minutes", self.actual_minutes)
 
         rem_row = QHBoxLayout()
+        configure_box_layout(rem_row)
         self.reminder_at = QDateTimeEdit()
         self.reminder_at.setCalendarPopup(True)
         self.reminder_at.setDisplayFormat("dd-MMM-yyyy HH:mm")
@@ -111,9 +119,11 @@ class TaskDetailsPanel(QWidget):
         self.reminder_before_minutes.setSuffix(" min before due")
         self.reminder_before_minutes.setToolTip("Minutes before due date for due-based reminder.")
         rem_row.addWidget(self.reminder_before_minutes)
-        form.addRow("Reminder", self._wrap(rem_row))
+        add_form_row(form, "Reminder", self._wrap(rem_row))
 
-        btn_row = QHBoxLayout()
+        actions_group = QGroupBox("Task actions")
+        actions_layout = QGridLayout(actions_group)
+        configure_grid_layout(actions_layout)
         self.save_btn = QPushButton("Save details")
         self.save_btn.setToolTip("Save edited task metadata from this panel.")
         self.start_timer_btn = QPushButton("Start timer")
@@ -126,22 +136,26 @@ class TaskDetailsPanel(QWidget):
         self.set_due_reminder_btn.setToolTip("Set reminder based on due date minus offset.")
         self.clear_reminder_btn = QPushButton("Clear reminder")
         self.clear_reminder_btn.setToolTip("Remove reminder from selected task.")
-        btn_row.addWidget(self.save_btn)
-        btn_row.addWidget(self.start_timer_btn)
-        btn_row.addWidget(self.stop_timer_btn)
-        btn_row.addWidget(self.set_reminder_btn)
-        btn_row.addWidget(self.set_due_reminder_btn)
-        btn_row.addWidget(self.clear_reminder_btn)
-        root.addLayout(btn_row)
+        actions_layout.addWidget(self.save_btn, 0, 0)
+        actions_layout.addWidget(self.start_timer_btn, 0, 1)
+        actions_layout.addWidget(self.stop_timer_btn, 0, 2)
+        actions_layout.addWidget(self.set_reminder_btn, 1, 0)
+        actions_layout.addWidget(self.set_due_reminder_btn, 1, 1)
+        actions_layout.addWidget(self.clear_reminder_btn, 1, 2)
+        actions_layout.setColumnStretch(3, 1)
+        root.addWidget(actions_group)
 
-        root.addWidget(QLabel("Attachments"))
+        attachments_group = QGroupBox("Attachments")
+        attachments_layout = QVBoxLayout(attachments_group)
+        configure_box_layout(attachments_layout)
         self.attachments = QListWidget()
         self.attachments.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.attachments.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.attachments.setToolTip("Linked files/folders for this task.")
-        root.addWidget(self.attachments, 1)
+        attachments_layout.addWidget(self.attachments, 1)
 
         att_row = QHBoxLayout()
+        configure_box_layout(att_row)
         self.add_file_btn = QPushButton("Add file")
         self.add_file_btn.setToolTip("Attach one or more files to selected task.")
         self.add_folder_btn = QPushButton("Add folder")
@@ -150,11 +164,15 @@ class TaskDetailsPanel(QWidget):
         self.open_attachment_btn.setToolTip("Open selected attachment with system handler.")
         self.remove_attachment_btn = QPushButton("Remove")
         self.remove_attachment_btn.setToolTip("Remove selected attachment link from task.")
-        att_row.addWidget(self.add_file_btn)
-        att_row.addWidget(self.add_folder_btn)
-        att_row.addWidget(self.open_attachment_btn)
-        att_row.addWidget(self.remove_attachment_btn)
-        root.addLayout(att_row)
+        add_left_aligned_buttons(
+            att_row,
+            self.add_file_btn,
+            self.add_folder_btn,
+            self.open_attachment_btn,
+            self.remove_attachment_btn,
+        )
+        attachments_layout.addLayout(att_row)
+        root.addWidget(attachments_group, 1)
 
     def _wrap(self, layout):
         w = QWidget()

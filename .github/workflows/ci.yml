@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax-and-ui-smoke:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Compile Python sources
+        run: python -m py_compile *.py
+
+      - name: UI smoke import
+        run: |
+          python - <<'PY'
+          from PySide6.QtWidgets import QApplication
+          from PySide6.QtCore import QSettings
+          from settings_ui import SettingsDialog
+          from command_palette import CommandPaletteDialog, PaletteCommand
+          from filters_ui import FilterPanel
+
+          app = QApplication([])
+          SettingsDialog(QSettings("FocusTools", "CustomTaskManager"))
+          CommandPaletteDialog([PaletteCommand("ping", "Ping")])
+          FilterPanel(["Todo", "Done"])
+          print("UI smoke ok")
+          PY

@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -11,6 +12,14 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+)
+
+from ui_layout import (
+    DEFAULT_DIALOG_MARGINS,
+    add_form_row,
+    add_left_aligned_buttons,
+    configure_box_layout,
+    configure_form_layout,
 )
 
 
@@ -24,15 +33,18 @@ class ArchiveBrowserDialog(QDialog):
         self._rows = [dict(r) for r in (rows or [])]
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
+        configure_box_layout(root, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
 
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Search"))
+        intro = QLabel("Browse archived task roots and restore only the items you want back in the active tree.")
+        intro.setWordWrap(True)
+        root.addWidget(intro)
+
+        top = QFormLayout()
+        configure_form_layout(top, label_width=80)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Filter archived tasks by description/status/date/priority")
         self.search.setToolTip("Filter archive list by keyword.")
-        top.addWidget(self.search, 1)
+        add_form_row(top, "Search", self.search)
         root.addLayout(top)
 
         self.table = QTableWidget(0, 6)
@@ -61,9 +73,7 @@ class ArchiveBrowserDialog(QDialog):
         self.restore_btn.setToolTip("Restore selected archived task roots and their subtrees.")
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setToolTip("Close archive browser without restoring.")
-        btns.addWidget(self.restore_btn)
-        btns.addStretch(1)
-        btns.addWidget(self.cancel_btn)
+        add_left_aligned_buttons(btns, self.restore_btn, self.cancel_btn)
         root.addLayout(btns)
 
         self.search.textChanged.connect(self._rebuild)

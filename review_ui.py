@@ -3,8 +3,9 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFormLayout,
+    QGroupBox,
     QHBoxLayout,
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -13,6 +14,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from ui_layout import add_form_row, add_left_aligned_buttons, configure_box_layout, configure_form_layout
 
 
 REVIEW_CATEGORIES: list[tuple[str, str]] = [
@@ -42,36 +45,38 @@ class ReviewWorkflowPanel(QWidget):
         self._lists: dict[str, QListWidget] = {}
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(8)
+        configure_box_layout(root, margins=(8, 8, 8, 8), spacing=10)
 
-        controls = QHBoxLayout()
-        controls.addWidget(QLabel("Waiting older than"))
+        controls_group = QGroupBox("Review controls")
+        controls_root = QVBoxLayout(controls_group)
+        configure_box_layout(controls_root)
+        controls = QFormLayout()
+        configure_form_layout(controls, label_width=160)
         self.waiting_days = QSpinBox()
         self.waiting_days.setRange(1, 365)
         self.waiting_days.setValue(7)
         self.waiting_days.setSuffix(" days")
-        controls.addWidget(self.waiting_days)
+        add_form_row(controls, "Waiting older than", self.waiting_days)
 
-        controls.addWidget(QLabel("Stalled threshold"))
         self.stalled_days = QSpinBox()
         self.stalled_days.setRange(1, 365)
         self.stalled_days.setValue(14)
         self.stalled_days.setSuffix(" days")
-        controls.addWidget(self.stalled_days)
+        add_form_row(controls, "Stalled threshold", self.stalled_days)
 
-        controls.addWidget(QLabel("Recent window"))
         self.recent_days = QSpinBox()
         self.recent_days.setRange(1, 365)
         self.recent_days.setValue(30)
         self.recent_days.setSuffix(" days")
-        controls.addWidget(self.recent_days)
+        add_form_row(controls, "Recent window", self.recent_days)
+        controls_root.addLayout(controls)
 
         self.refresh_btn = QPushButton("Refresh review")
         self.refresh_btn.setToolTip("Refresh all review categories using current thresholds.")
-        controls.addWidget(self.refresh_btn)
-        controls.addStretch(1)
-        root.addLayout(controls)
+        controls_actions = QHBoxLayout()
+        add_left_aligned_buttons(controls_actions, self.refresh_btn)
+        controls_root.addLayout(controls_actions)
+        root.addWidget(controls_group)
 
         self.tabs = QTabWidget()
         root.addWidget(self.tabs, 1)
@@ -91,11 +96,7 @@ class ReviewWorkflowPanel(QWidget):
         self.done_btn = QPushButton("Mark done")
         self.archive_btn = QPushButton("Archive")
         self.restore_btn = QPushButton("Restore")
-        actions.addWidget(self.focus_btn)
-        actions.addWidget(self.done_btn)
-        actions.addWidget(self.archive_btn)
-        actions.addWidget(self.restore_btn)
-        actions.addStretch(1)
+        add_left_aligned_buttons(actions, self.focus_btn, self.done_btn, self.archive_btn, self.restore_btn)
         root.addLayout(actions)
 
         self.refresh_btn.clicked.connect(self._emit_refresh)

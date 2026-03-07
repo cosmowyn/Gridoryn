@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QDateTime
 from PySide6.QtWidgets import (
     QDialog,
+    QFormLayout,
     QVBoxLayout,
     QLabel,
     QListWidget,
@@ -10,6 +11,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QDateTimeEdit,
+)
+
+from ui_layout import (
+    DEFAULT_DIALOG_MARGINS,
+    add_form_row,
+    add_left_aligned_buttons,
+    configure_box_layout,
+    configure_form_layout,
 )
 
 
@@ -26,8 +35,7 @@ class ReminderBatchDialog(QDialog):
         self.resize(560, 360)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
+        configure_box_layout(root, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
 
         title = QLabel(f"{len(reminders)} reminder(s) are due")
         title.setWordWrap(True)
@@ -46,14 +54,14 @@ class ReminderBatchDialog(QDialog):
             self.list.addItem(it)
         root.addWidget(self.list, 1)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Snooze until"))
+        row = QFormLayout()
+        configure_form_layout(row, label_width=100)
         self.snooze_at = QDateTimeEdit()
         self.snooze_at.setCalendarPopup(True)
         self.snooze_at.setDisplayFormat("dd-MMM-yyyy HH:mm")
         self.snooze_at.setDateTime(QDateTime.currentDateTime().addSecs(15 * 60))
         self.snooze_at.setToolTip("Date and time to show these reminders again.")
-        row.addWidget(self.snooze_at, 1)
+        add_form_row(row, "Snooze until", self.snooze_at)
         root.addLayout(row)
 
         btn_row = QHBoxLayout()
@@ -63,10 +71,7 @@ class ReminderBatchDialog(QDialog):
         self.snooze_btn.setToolTip("Move shown reminders to the selected snooze date/time.")
         self.close_btn = QPushButton("Close")
         self.close_btn.setToolTip("Close without changing reminder state.")
-        btn_row.addWidget(self.ack_btn)
-        btn_row.addWidget(self.snooze_btn)
-        btn_row.addStretch(1)
-        btn_row.addWidget(self.close_btn)
+        add_left_aligned_buttons(btn_row, self.ack_btn, self.snooze_btn, self.close_btn)
         root.addLayout(btn_row)
 
         self.ack_btn.clicked.connect(self._acknowledge)

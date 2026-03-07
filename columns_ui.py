@@ -1,6 +1,16 @@
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QComboBox, QPushButton, QListWidget, QListWidgetItem
+    QComboBox, QPushButton, QListWidget, QListWidgetItem, QFormLayout
+)
+
+from ui_layout import (
+    DEFAULT_DIALOG_MARGINS,
+    add_form_row,
+    add_left_aligned_buttons,
+    configure_box_layout,
+    configure_form_layout,
+    form_label,
 )
 
 
@@ -8,41 +18,36 @@ class AddColumnDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Add custom column")
+        self.resize(460, 180)
 
         v = QVBoxLayout(self)
+        configure_box_layout(v, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
 
-        row1 = QHBoxLayout()
-        row1.addWidget(QLabel("Name"))
+        form = QFormLayout()
+        configure_form_layout(form, label_width=100)
+        v.addLayout(form)
+
         self.name = QLineEdit()
-        row1.addWidget(self.name)
-        v.addLayout(row1)
+        add_form_row(form, "Name", self.name)
 
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Type"))
         self.typ = QComboBox()
         self.typ.addItems(["text", "int", "date", "bool", "list"])
-        row2.addWidget(self.typ)
-        v.addLayout(row2)
+        add_form_row(form, "Type", self.typ)
 
-        row3 = QHBoxLayout()
-        self._list_label = QLabel("List values")
-        row3.addWidget(self._list_label)
+        self._list_label = form_label("List values", 100)
         self.list_values = QLineEdit()
         self.list_values.setPlaceholderText("Comma-separated values (optional)")
-        row3.addWidget(self.list_values)
-        v.addLayout(row3)
+        form.addRow(self._list_label, self.list_values)
 
         self.typ.currentTextChanged.connect(self._update_type_ui)
         self._update_type_ui(self.typ.currentText())
 
         btns = QHBoxLayout()
-        btns.addStretch(1)
         ok = QPushButton("Add")
         cancel = QPushButton("Cancel")
         ok.clicked.connect(self.accept)
         cancel.clicked.connect(self.reject)
-        btns.addWidget(ok)
-        btns.addWidget(cancel)
+        add_left_aligned_buttons(btns, ok, cancel)
         v.addLayout(btns)
 
     def _update_type_ui(self, col_type: str):
@@ -68,12 +73,16 @@ class RemoveColumnDialog(QDialog):
     def __init__(self, columns: list[dict], parent=None):
         super().__init__(parent)
         self.setWindowTitle("Remove custom column")
+        self.resize(420, 320)
         self.columns = columns
 
         v = QVBoxLayout(self)
+        configure_box_layout(v, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
         v.addWidget(QLabel("Select a column to remove:"))
 
         self.list = QListWidget()
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         for c in columns:
             item = QListWidgetItem(f"{c['name']}  ({c['col_type']})")
             item.setData(32, int(c["id"]))
@@ -81,13 +90,11 @@ class RemoveColumnDialog(QDialog):
         v.addWidget(self.list)
 
         btns = QHBoxLayout()
-        btns.addStretch(1)
         ok = QPushButton("Remove")
         cancel = QPushButton("Cancel")
         ok.clicked.connect(self.accept)
         cancel.clicked.connect(self.reject)
-        btns.addWidget(ok)
-        btns.addWidget(cancel)
+        add_left_aligned_buttons(btns, ok, cancel)
         v.addLayout(btns)
 
     def selected_column_id(self):

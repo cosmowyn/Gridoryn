@@ -6,18 +6,37 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QComboBox,
     QColorDialog, QFontDialog, QFileDialog, QLineEdit,
     QGroupBox, QFormLayout, QPlainTextEdit, QMessageBox,
-    QInputDialog, QScrollArea, QWidget, QCheckBox, QSpinBox
+    QInputDialog, QScrollArea, QWidget, QCheckBox, QSpinBox, QGridLayout, QSizePolicy
 )
 
 from theme import ThemeManager, default_theme_dict
+from ui_layout import (
+    DEFAULT_DIALOG_MARGINS,
+    add_form_row,
+    add_left_aligned_buttons,
+    configure_box_layout,
+    configure_form_layout,
+    configure_grid_layout,
+)
 
 
 BORDER_STYLES = ["solid", "dash", "dot", "dashdot", "dashdotdot"]
+COLOR_BUTTON_MIN_WIDTH = 220
+COLOR_BUTTON_MIN_HEIGHT = 36
+SETTINGS_EDITOR_MIN_WIDTH = 1020
 
 
 def _set_color_btn(btn: QPushButton, color: str):
+    btn.setMinimumWidth(COLOR_BUTTON_MIN_WIDTH)
+    btn.setMinimumHeight(max(COLOR_BUTTON_MIN_HEIGHT, btn.fontMetrics().height() + 16))
+    btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     btn.setText(color)
-    btn.setStyleSheet(f"background: {color}; border: 1px solid rgba(0,0,0,0.20); padding: 6px 10px;")
+    btn.setStyleSheet(
+        f"background: {color};"
+        " border: 1px solid rgba(0,0,0,0.20);"
+        " padding: 8px 14px;"
+        " text-align: left;"
+    )
 
 
 def _font_label(font: QFont) -> str:
@@ -38,14 +57,12 @@ class SettingsDialog(QDialog):
         self._border_widgets: dict[str, dict[str, dict[str, object]]] = {}
 
         root = QVBoxLayout(self)
+        configure_box_layout(root, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
 
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Theme"))
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(self.tm.list_themes())
         self.theme_combo.setCurrentText(self._theme_name)
         self.theme_combo.currentTextChanged.connect(self._on_theme_selected)
-        top.addWidget(self.theme_combo, 1)
 
         self.btn_new = QPushButton("New")
         self.btn_save = QPushButton("Save")
@@ -57,21 +74,28 @@ class SettingsDialog(QDialog):
         self.btn_save_as.clicked.connect(self._save_as_theme)
         self.btn_delete.clicked.connect(self._delete_theme)
 
-        top.addWidget(self.btn_new)
-        top.addWidget(self.btn_save)
-        top.addWidget(self.btn_save_as)
-        top.addWidget(self.btn_delete)
-
-        root.addLayout(top)
+        theme_group = QGroupBox("Theme management")
+        theme_layout = QVBoxLayout(theme_group)
+        configure_box_layout(theme_layout)
+        theme_form = QFormLayout()
+        configure_form_layout(theme_form, label_width=140)
+        add_form_row(theme_form, "Active theme", self.theme_combo)
+        theme_layout.addLayout(theme_form)
+        theme_actions = QHBoxLayout()
+        add_left_aligned_buttons(theme_actions, self.btn_new, self.btn_save, self.btn_save_as, self.btn_delete)
+        theme_layout.addLayout(theme_actions)
+        root.addWidget(theme_group)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         root.addWidget(scroll, 1)
 
         editor = QWidget()
+        editor.setMinimumWidth(SETTINGS_EDITOR_MIN_WIDTH)
         self.form_root = QVBoxLayout(editor)
-        self.form_root.setContentsMargins(0, 0, 0, 0)
-        self.form_root.setSpacing(10)
+        configure_box_layout(self.form_root, margins=(0, 0, 0, 0), spacing=10)
         scroll.setWidget(editor)
 
         self._build_application_group()
@@ -89,27 +113,28 @@ class SettingsDialog(QDialog):
         self._build_advanced_group()
 
         bottom = QHBoxLayout()
-        bottom.addStretch(1)
         ok = QPushButton("OK")
         cancel = QPushButton("Cancel")
         ok.clicked.connect(self._ok)
         cancel.clicked.connect(self.reject)
-        bottom.addWidget(ok)
-        bottom.addWidget(cancel)
+        add_left_aligned_buttons(bottom, ok, cancel)
         root.addLayout(bottom)
 
         self._load_theme_into_controls()
 
     def _mk_group(self, title: str) -> QGroupBox:
         g = QGroupBox(title)
-        g.setLayout(QFormLayout())
+        form = QFormLayout()
+        configure_form_layout(form, label_width=190)
+        form.setVerticalSpacing(12)
+        g.setLayout(form)
         self.form_root.addWidget(g)
         return g
 
     def _wrap_row(self, lbl: QLabel, btn: QPushButton) -> QWidget:
         w = QWidget()
         h = QHBoxLayout(w)
-        h.setContentsMargins(0, 0, 0, 0)
+        configure_box_layout(h)
         h.addWidget(lbl, 1)
         h.addWidget(btn)
         return w
@@ -124,6 +149,7 @@ class SettingsDialog(QDialog):
         g = self._mk_group("Application")
 
         row = QHBoxLayout()
+        configure_box_layout(row)
         self.icon_path = QLineEdit()
         self.btn_browse_icon = QPushButton("Browse…")
         self.btn_browse_icon.clicked.connect(self._browse_icon)
@@ -356,40 +382,36 @@ class SettingsDialog(QDialog):
 
     def _build_border_group(self, title: str, section: str):
         group = QGroupBox(title)
-        layout = QVBoxLayout(group)
+        layout = QGridLayout(group)
+        configure_grid_layout(layout)
+        layout.addWidget(QLabel("Side"), 0, 0)
+        layout.addWidget(QLabel("Enabled"), 0, 1)
+        layout.addWidget(QLabel("Width"), 0, 2)
+        layout.addWidget(QLabel("Style"), 0, 3)
+        layout.addWidget(QLabel("Color"), 0, 4)
 
         self._border_widgets[section] = {}
 
-        for side in ("top", "right", "bottom", "left"):
-            row = QWidget()
-            h = QHBoxLayout(row)
-            h.setContentsMargins(0, 0, 0, 0)
-
-            enabled = QCheckBox("Enabled")
+        for row_idx, side in enumerate(("top", "right", "bottom", "left"), start=1):
+            enabled = QCheckBox()
             width = QSpinBox()
             width.setRange(0, 20)
             width.setSuffix(" px")
+            width.setMinimumWidth(90)
 
             color_btn = QPushButton()
             style_cb = QComboBox()
             style_cb.addItems(BORDER_STYLES)
+            style_cb.setMinimumWidth(130)
+            _set_color_btn(color_btn, "#000000")
 
             color_btn.clicked.connect(lambda _=False, s=section, sd=side, b=color_btn: self._pick_border_color(s, sd, b))
 
-            h.addWidget(QLabel(side.capitalize()))
-            h.addSpacing(8)
-            h.addWidget(enabled)
-            h.addSpacing(8)
-            h.addWidget(QLabel("Width"))
-            h.addWidget(width)
-            h.addSpacing(8)
-            h.addWidget(QLabel("Style"))
-            h.addWidget(style_cb)
-            h.addSpacing(8)
-            h.addWidget(QLabel("Color"))
-            h.addWidget(color_btn, 1)
-
-            layout.addWidget(row)
+            layout.addWidget(QLabel(side.capitalize()), row_idx, 0)
+            layout.addWidget(enabled, row_idx, 1)
+            layout.addWidget(width, row_idx, 2)
+            layout.addWidget(style_cb, row_idx, 3)
+            layout.addWidget(color_btn, row_idx, 4)
 
             self._border_widgets[section][side] = {
                 "enabled": enabled,
@@ -398,16 +420,23 @@ class SettingsDialog(QDialog):
                 "color_btn": color_btn,
             }
 
+        layout.setColumnMinimumWidth(2, 90)
+        layout.setColumnMinimumWidth(3, 130)
+        layout.setColumnMinimumWidth(4, COLOR_BUTTON_MIN_WIDTH)
+        layout.setColumnStretch(4, 1)
         self.form_root.addWidget(group)
 
     def _build_advanced_group(self):
         g = self._mk_group("Advanced")
         self.custom_qss = QPlainTextEdit()
+        self.custom_qss.setMinimumHeight(180)
+        self.custom_qss.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.custom_qss.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.custom_qss.setPlaceholderText(
             "Optional: add custom Qt StyleSheet (QSS) here.\n"
             "This is appended after the generated theme QSS, so it can override anything.\n"
         )
-        g.layout().addRow("Custom QSS override", self.custom_qss)
+        add_form_row(g.layout(), "Custom QSS override", self.custom_qss)
 
     def _on_theme_selected(self, name: str):
         if not name:

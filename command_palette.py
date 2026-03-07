@@ -6,6 +6,7 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -13,6 +14,14 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QVBoxLayout,
+)
+
+from ui_layout import (
+    DEFAULT_DIALOG_MARGINS,
+    add_form_row,
+    add_left_aligned_buttons,
+    configure_box_layout,
+    configure_form_layout,
 )
 
 
@@ -39,15 +48,18 @@ class CommandPaletteDialog(QDialog):
         self._commands = list(commands or [])
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
+        configure_box_layout(root, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
 
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Command"))
+        intro = QLabel("Search commands and press Enter to execute the selected action.")
+        intro.setWordWrap(True)
+        root.addWidget(intro)
+
+        top = QFormLayout()
+        configure_form_layout(top, label_width=90)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Type to search commands…")
         self.search.setToolTip("Search by command title, alias, or workflow keyword.")
-        top.addWidget(self.search, 1)
+        add_form_row(top, "Command", self.search)
         root.addLayout(top)
 
         self.list = QListWidget()
@@ -59,9 +71,7 @@ class CommandPaletteDialog(QDialog):
         btn_row = QHBoxLayout()
         self.run_btn = QPushButton("Run")
         self.close_btn = QPushButton("Close")
-        btn_row.addWidget(self.run_btn)
-        btn_row.addStretch(1)
-        btn_row.addWidget(self.close_btn)
+        add_left_aligned_buttons(btn_row, self.run_btn, self.close_btn)
         root.addLayout(btn_row)
 
         self.search.textChanged.connect(self._rebuild)

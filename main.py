@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTreeView, QPushButton, QToolBar, QMenu, QMessageBox,
     QLineEdit, QDockWidget, QLabel, QToolButton, QComboBox, QInputDialog,
-    QFileDialog, QListWidget, QListWidgetItem, QUndoView, QScrollArea
+    QFileDialog, QListWidget, QListWidgetItem, QUndoView, QScrollArea,
+    QGridLayout, QGroupBox
 )
 
 from app_paths import app_db_path
@@ -40,6 +41,7 @@ from analytics_ui import AnalyticsPanel
 
 from backup_io import export_backup_ui, import_backup_ui
 from theme_io import export_themes_ui, import_themes_ui
+from ui_layout import add_left_aligned_buttons, configure_box_layout, configure_grid_layout
 
 
 class MainWindow(QMainWindow):
@@ -151,23 +153,6 @@ class MainWindow(QMainWindow):
         for w in (self.quick_add, self.view_mode, self.sort_mode):
             w.setMinimumHeight(control_h)
 
-        quick_lbl = QLabel("Quick add")
-        quick_lbl.setMinimumWidth(80)
-        view_lbl = QLabel("View")
-        view_lbl.setMinimumWidth(80)
-        sort_lbl = QLabel("Sort")
-        sort_lbl.setMinimumWidth(80)
-
-        quick_row = QHBoxLayout()
-        quick_row.setContentsMargins(0, 0, 0, 0)
-        quick_row.setSpacing(8)
-        quick_row.addWidget(quick_lbl)
-        quick_row.addWidget(self.quick_add, 1)
-        quick_row.addWidget(view_lbl)
-        quick_row.addWidget(self.view_mode)
-        quick_row.addWidget(sort_lbl)
-        quick_row.addWidget(self.sort_mode)
-
         # --- Search bar (above the view)
         self.search = QLineEdit()
         self.search.setObjectName("SearchBar")
@@ -182,15 +167,6 @@ class MainWindow(QMainWindow):
         clear_btn.clicked.connect(lambda: self.search.setText(""))
         clear_btn.setMinimumHeight(control_h)
 
-        search_lbl = QLabel("Search")
-        search_lbl.setMinimumWidth(80)
-        search_row = QHBoxLayout()
-        search_row.setContentsMargins(0, 0, 0, 0)
-        search_row.setSpacing(8)
-        search_row.addWidget(search_lbl)
-        search_row.addWidget(self.search, 1)
-        search_row.addWidget(clear_btn)
-
         add_btn = QPushButton("Add task")
         add_btn.clicked.connect(self._add_task_and_edit)
         add_btn.setMinimumHeight(control_h)
@@ -198,20 +174,38 @@ class MainWindow(QMainWindow):
         # Layout
         main = QWidget()
         v = QVBoxLayout(main)
+        configure_box_layout(v, margins=(8, 8, 8, 8), spacing=8)
 
-        top_controls = QWidget()
-        top_layout = QVBoxLayout(top_controls)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(4)
-        top_layout.addLayout(quick_row)
-        top_layout.addLayout(search_row)
+        top_controls = QGroupBox("Capture and navigation")
+        top_layout = QGridLayout(top_controls)
+        configure_grid_layout(top_layout)
+        quick_lbl = QLabel("Quick add")
+        search_lbl = QLabel("Search")
+        view_lbl = QLabel("View")
+        sort_lbl = QLabel("Sort")
+        for lbl in (quick_lbl, search_lbl, view_lbl, sort_lbl):
+            lbl.setMinimumWidth(80)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        top_layout.addWidget(quick_lbl, 0, 0)
+        top_layout.addWidget(self.quick_add, 0, 1)
+        top_layout.addWidget(view_lbl, 0, 2)
+        top_layout.addWidget(self.view_mode, 0, 3)
+        top_layout.addWidget(sort_lbl, 0, 4)
+        top_layout.addWidget(self.sort_mode, 0, 5)
+        top_layout.addWidget(search_lbl, 1, 0)
+        top_layout.addWidget(self.search, 1, 1, 1, 4)
+        top_layout.addWidget(clear_btn, 1, 5)
+        top_layout.setColumnStretch(1, 1)
+        top_layout.setColumnStretch(3, 0)
+        top_layout.setColumnStretch(5, 0)
 
         top_scroll = QScrollArea()
         top_scroll.setWidgetResizable(True)
         top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         top_scroll.setWidget(top_controls)
-        top_scroll.setMaximumHeight((control_h * 2) + 24)
+        top_scroll.setMaximumHeight((control_h * 2) + 56)
         v.addWidget(top_scroll, 0)
 
         self._row_gutter = QWidget()
@@ -229,8 +223,7 @@ class MainWindow(QMainWindow):
         v.addWidget(tree_wrap, 1)
 
         h = QHBoxLayout()
-        h.addStretch(1)
-        h.addWidget(add_btn)
+        add_left_aligned_buttons(h, add_btn)
         v.addLayout(h)
 
         self.setCentralWidget(main)
@@ -645,22 +638,29 @@ class MainWindow(QMainWindow):
     def _init_calendar_dock(self):
         wrap = QWidget()
         v = QVBoxLayout(wrap)
-        v.setContentsMargins(6, 6, 6, 6)
-        v.setSpacing(6)
+        configure_box_layout(v, margins=(6, 6, 6, 6), spacing=8)
 
+        calendar_group = QGroupBox("Calendar")
+        calendar_layout = QVBoxLayout(calendar_group)
+        configure_box_layout(calendar_layout)
         self.calendar = TaskCalendarWidget()
         self.calendar.setGridVisible(True)
         self.calendar.setVerticalHeaderFormat(self.calendar.VerticalHeaderFormat.ISOWeekNumbers)
         self.calendar.selectionChanged.connect(self._refresh_calendar_list)
         self.calendar.currentPageChanged.connect(lambda *_: self._refresh_calendar_markers())
-        v.addWidget(self.calendar)
+        calendar_layout.addWidget(self.calendar)
+        v.addWidget(calendar_group)
 
+        agenda_group = QGroupBox("Agenda")
+        agenda_layout = QVBoxLayout(agenda_group)
+        configure_box_layout(agenda_layout)
         self.calendar_list = QListWidget()
         self.calendar_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.calendar_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.calendar_list.itemActivated.connect(self._on_calendar_task_activated)
         self.calendar_list.itemDoubleClicked.connect(self._on_calendar_task_activated)
-        v.addWidget(self.calendar_list, 1)
+        agenda_layout.addWidget(self.calendar_list, 1)
+        v.addWidget(agenda_group, 1)
 
         self.calendar_dock = QDockWidget("Calendar / Agenda", self)
         self.calendar_dock.setObjectName("CalendarDock")
