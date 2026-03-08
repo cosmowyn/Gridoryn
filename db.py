@@ -7,10 +7,32 @@ from pathlib import Path
 from app_paths import app_data_dir
 from crash_logging import log_event
 from project_intelligence import analyze_projects, analyze_workload
+from project_management import (
+    DEFAULT_PHASE_NAMES,
+    DELIVERABLE_STATUSES,
+    DEPENDENCY_TYPE_FINISH_TO_START,
+    MILESTONE_STATUSES,
+    PROJECT_HEALTH_STATES,
+    REGISTER_ENTRY_TYPES,
+    REGISTER_STATUSES,
+    build_project_summary,
+    build_timeline_rows,
+    compute_baseline_variance,
+    compute_personal_capacity,
+    default_phases_payload,
+    health_label,
+    is_dependency_blocked,
+    normalize_dependency_refs,
+    normalize_health,
+    normalize_record_status,
+    normalize_register_type,
+    parse_iso_date as pm_parse_iso_date,
+    validate_dependency_graph,
+)
 
 
 RECURRENCE_FREQUENCIES = {"daily", "weekly", "monthly", "yearly"}
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 5
 
 
 class DatabaseError(RuntimeError):
@@ -182,6 +204,13 @@ class Database:
             "task_attachments",
             "task_dependencies",
             "task_templates",
+            "project_profiles",
+            "project_phases",
+            "pm_dependencies",
+            "milestones",
+            "deliverables",
+            "project_register_entries",
+            "project_baselines",
         }
         cur = self.conn.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
@@ -212,6 +241,8 @@ class Database:
             "reminder_at",
             "reminder_minutes_before",
             "reminder_fired_at",
+            "start_date",
+            "phase_id",
         }
         if "tasks" in existing_tables:
             cur.execute("PRAGMA table_info(tasks);")
@@ -301,6 +332,12 @@ class Database:
             cur.execute("PRAGMA user_version=4;")
             self.conn.commit()
             ver = 4
+
+        if ver < 5:
+            self._migrate_to_v5_project_management()
+            cur.execute("PRAGMA user_version=5;")
+            self.conn.commit()
+            ver = 5
 
     def _create_v1(self):
         cur = self.conn.cursor()
@@ -525,6 +562,179 @@ class Database:
             """
         )
 
+    def _migrate_to_v5_project_management(self):
+        cur = self.conn.cursor()
+
+        self._add_column_if_missing("tasks", "start_date", "TEXT NULL")
+        self._add_column_if_missing("tasks", "phase_id", "INTEGER NULL")
+
+        cur.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS project_profiles (
+                task_id                INTEGER PRIMARY KEY,
+                objective              TEXT    NOT NULL DEFAULT '',
+                scope                  TEXT    NOT NULL DEFAULT '',
+                out_of_scope           TEXT    NOT NULL DEFAULT '',
+                owner                  TEXT    NOT NULL DEFAULT 'Self',
+                stakeholders           TEXT    NOT NULL DEFAULT '',
+                target_date            TEXT    NULL,
+                success_criteria       TEXT    NOT NULL DEFAULT '',
+                project_status_health  TEXT    NULL,
+                summary                TEXT    NOT NULL DEFAULT '',
+                category               TEXT    NOT NULL DEFAULT '',
+                created_at             TEXT    NOT NULL,
+                updated_at             TEXT    NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS project_phases (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_task_id  INTEGER NOT NULL,
+                name             TEXT    NOT NULL,
+                sort_order       INTEGER NOT NULL DEFAULT 1,
+                created_at       TEXT    NOT NULL,
+                updated_at       TEXT    NOT NULL,
+                UNIQUE(project_task_id, name),
+                FOREIGN KEY(project_task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_project_phases_project_sort
+            ON project_phases(project_task_id, sort_order, id);
+
+            CREATE TABLE IF NOT EXISTS pm_dependencies (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                predecessor_kind  TEXT    NOT NULL,
+                predecessor_id    INTEGER NOT NULL,
+                successor_kind    TEXT    NOT NULL,
+                successor_id      INTEGER NOT NULL,
+                dep_type          TEXT    NOT NULL DEFAULT 'finish_to_start',
+                is_soft           INTEGER NOT NULL DEFAULT 0,
+                created_at        TEXT    NOT NULL,
+                UNIQUE(predecessor_kind, predecessor_id, successor_kind, successor_id, dep_type)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pm_dependencies_successor
+            ON pm_dependencies(successor_kind, successor_id, predecessor_kind, predecessor_id);
+
+            CREATE INDEX IF NOT EXISTS idx_pm_dependencies_predecessor
+            ON pm_dependencies(predecessor_kind, predecessor_id, successor_kind, successor_id);
+
+            CREATE TABLE IF NOT EXISTS milestones (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_task_id       INTEGER NOT NULL,
+                title                 TEXT    NOT NULL,
+                description           TEXT    NOT NULL DEFAULT '',
+                phase_id              INTEGER NULL,
+                linked_task_id        INTEGER NULL,
+                start_date            TEXT    NULL,
+                target_date           TEXT    NULL,
+                baseline_target_date  TEXT    NULL,
+                status                TEXT    NOT NULL DEFAULT 'planned',
+                progress_percent      INTEGER NOT NULL DEFAULT 0,
+                completed_at          TEXT    NULL,
+                created_at            TEXT    NOT NULL,
+                updated_at            TEXT    NOT NULL,
+                FOREIGN KEY(project_task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY(phase_id) REFERENCES project_phases(id) ON DELETE SET NULL,
+                FOREIGN KEY(linked_task_id) REFERENCES tasks(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_milestones_project_target
+            ON milestones(project_task_id, target_date, status, id);
+
+            CREATE TABLE IF NOT EXISTS deliverables (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_task_id      INTEGER NOT NULL,
+                title                TEXT    NOT NULL,
+                description          TEXT    NOT NULL DEFAULT '',
+                phase_id             INTEGER NULL,
+                linked_task_id       INTEGER NULL,
+                linked_milestone_id  INTEGER NULL,
+                due_date             TEXT    NULL,
+                baseline_due_date    TEXT    NULL,
+                acceptance_criteria  TEXT    NOT NULL DEFAULT '',
+                version_ref          TEXT    NOT NULL DEFAULT '',
+                status               TEXT    NOT NULL DEFAULT 'planned',
+                completed_at         TEXT    NULL,
+                created_at           TEXT    NOT NULL,
+                updated_at           TEXT    NOT NULL,
+                FOREIGN KEY(project_task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY(phase_id) REFERENCES project_phases(id) ON DELETE SET NULL,
+                FOREIGN KEY(linked_task_id) REFERENCES tasks(id) ON DELETE SET NULL,
+                FOREIGN KEY(linked_milestone_id) REFERENCES milestones(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deliverables_project_due
+            ON deliverables(project_task_id, due_date, status, id);
+
+            CREATE TABLE IF NOT EXISTS project_register_entries (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_task_id     INTEGER NOT NULL,
+                entry_type          TEXT    NOT NULL,
+                title               TEXT    NOT NULL,
+                details             TEXT    NOT NULL DEFAULT '',
+                status              TEXT    NOT NULL DEFAULT 'open',
+                severity            INTEGER NULL,
+                review_date         TEXT    NULL,
+                linked_task_id      INTEGER NULL,
+                linked_milestone_id INTEGER NULL,
+                created_at          TEXT    NOT NULL,
+                updated_at          TEXT    NOT NULL,
+                FOREIGN KEY(project_task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY(linked_task_id) REFERENCES tasks(id) ON DELETE SET NULL,
+                FOREIGN KEY(linked_milestone_id) REFERENCES milestones(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_project_register_entries_project
+            ON project_register_entries(project_task_id, entry_type, status, id);
+
+            CREATE TABLE IF NOT EXISTS project_baselines (
+                project_task_id  INTEGER PRIMARY KEY,
+                target_date      TEXT    NULL,
+                effort_minutes   INTEGER NULL,
+                created_at       TEXT    NOT NULL,
+                updated_at       TEXT    NOT NULL,
+                FOREIGN KEY(project_task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tasks_phase_id ON tasks(phase_id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_start_date ON tasks(start_date);
+            """
+        )
+
+        cur.execute(
+            """
+            INSERT INTO pm_dependencies(
+                predecessor_kind,
+                predecessor_id,
+                successor_kind,
+                successor_id,
+                dep_type,
+                is_soft,
+                created_at
+            )
+            SELECT
+                'task',
+                td.depends_on_task_id,
+                'task',
+                td.task_id,
+                'finish_to_start',
+                0,
+                ?
+            FROM task_dependencies td
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM pm_dependencies pd
+                WHERE pd.predecessor_kind='task'
+                  AND pd.predecessor_id=td.depends_on_task_id
+                  AND pd.successor_kind='task'
+                  AND pd.successor_id=td.task_id
+                  AND pd.dep_type='finish_to_start'
+            );
+            """,
+            (now_iso(),),
+        )
+
     @contextmanager
     def tx(self):
         try:
@@ -700,6 +910,96 @@ class Database:
                 missing.append(dict(row))
         return missing
 
+    def _project_management_integrity_report(self) -> dict[str, list[dict]]:
+        cur = self.conn.cursor()
+
+        cur.execute(
+            """
+            SELECT t.id, t.description, t.phase_id
+            FROM tasks t
+            LEFT JOIN project_phases pp ON pp.id = t.phase_id
+            WHERE t.phase_id IS NOT NULL
+              AND pp.id IS NULL
+            ORDER BY t.id;
+            """
+        )
+        broken_task_phase_refs = [dict(row) for row in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT pd.id, pd.predecessor_kind, pd.predecessor_id, pd.successor_kind, pd.successor_id
+            FROM pm_dependencies pd
+            LEFT JOIN tasks pt ON pd.predecessor_kind='task' AND pt.id = pd.predecessor_id
+            LEFT JOIN milestones pm ON pd.predecessor_kind='milestone' AND pm.id = pd.predecessor_id
+            LEFT JOIN tasks st ON pd.successor_kind='task' AND st.id = pd.successor_id
+            LEFT JOIN milestones sm ON pd.successor_kind='milestone' AND sm.id = pd.successor_id
+            WHERE (pd.predecessor_kind='task' AND pt.id IS NULL)
+               OR (pd.predecessor_kind='milestone' AND pm.id IS NULL)
+               OR (pd.successor_kind='task' AND st.id IS NULL)
+               OR (pd.successor_kind='milestone' AND sm.id IS NULL)
+               OR pd.predecessor_kind NOT IN ('task', 'milestone')
+               OR pd.successor_kind NOT IN ('task', 'milestone')
+            ORDER BY pd.id;
+            """
+        )
+        broken_pm_dependencies = [dict(row) for row in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT m.id, m.title, m.project_task_id, m.phase_id, m.linked_task_id
+            FROM milestones m
+            LEFT JOIN tasks p ON p.id = m.project_task_id
+            LEFT JOIN project_phases pp ON pp.id = m.phase_id
+            LEFT JOIN tasks t ON t.id = m.linked_task_id
+            WHERE p.id IS NULL
+               OR (m.phase_id IS NOT NULL AND pp.id IS NULL)
+               OR (m.linked_task_id IS NOT NULL AND t.id IS NULL)
+            ORDER BY m.id;
+            """
+        )
+        malformed_milestones = [dict(row) for row in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT d.id, d.title, d.project_task_id, d.phase_id, d.linked_task_id, d.linked_milestone_id
+            FROM deliverables d
+            LEFT JOIN tasks p ON p.id = d.project_task_id
+            LEFT JOIN project_phases pp ON pp.id = d.phase_id
+            LEFT JOIN tasks t ON t.id = d.linked_task_id
+            LEFT JOIN milestones m ON m.id = d.linked_milestone_id
+            WHERE p.id IS NULL
+               OR (d.phase_id IS NOT NULL AND pp.id IS NULL)
+               OR (d.linked_task_id IS NOT NULL AND t.id IS NULL)
+               OR (d.linked_milestone_id IS NOT NULL AND m.id IS NULL)
+            ORDER BY d.id;
+            """
+        )
+        malformed_deliverables = [dict(row) for row in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT r.id, r.project_task_id, r.entry_type, r.title, r.linked_task_id, r.linked_milestone_id
+            FROM project_register_entries r
+            LEFT JOIN tasks p ON p.id = r.project_task_id
+            LEFT JOIN tasks t ON t.id = r.linked_task_id
+            LEFT JOIN milestones m ON m.id = r.linked_milestone_id
+            WHERE p.id IS NULL
+               OR (r.linked_task_id IS NOT NULL AND t.id IS NULL)
+               OR (r.linked_milestone_id IS NOT NULL AND m.id IS NULL)
+               OR r.entry_type NOT IN ('risk', 'issue', 'assumption', 'decision')
+            ORDER BY r.id;
+            """
+        )
+        malformed_register_entries = [dict(row) for row in cur.fetchall()]
+
+        return {
+            "broken_task_phase_refs": broken_task_phase_refs,
+            "broken_pm_dependencies": broken_pm_dependencies,
+            "malformed_milestones": malformed_milestones,
+            "malformed_deliverables": malformed_deliverables,
+            "malformed_register_entries": malformed_register_entries,
+        }
+
     def fetch_all_attachments(self) -> list[dict]:
         cur = self.conn.cursor()
         cur.execute(
@@ -732,6 +1032,7 @@ class Database:
         invalid_sort_groups = self._invalid_sibling_sort_order_groups()
         orphaned_custom_values = self._orphaned_custom_values()
         malformed_recurrence = self._malformed_recurrence_report()
+        project_management = self._project_management_integrity_report()
         missing_attachments = self._missing_file_attachments() if include_attachment_scan else []
 
         recurrence_issue_count = sum(len(v) for v in malformed_recurrence.values())
@@ -739,11 +1040,13 @@ class Database:
             len(orphaned_custom_values["missing_tasks"]) +
             len(orphaned_custom_values["missing_columns"])
         )
+        pm_issue_count = sum(len(v) for v in project_management.values())
         preview = {
             "reset_broken_parent_links": len(broken_parents),
             "normalize_sort_order_groups": len(invalid_sort_groups),
             "delete_orphaned_custom_values": orphan_issue_count,
             "repair_recurrence_records": recurrence_issue_count,
+            "repair_project_management_records": pm_issue_count,
         }
 
         return {
@@ -758,6 +1061,7 @@ class Database:
             "invalid_sibling_sort_orders": invalid_sort_groups,
             "orphaned_custom_values": orphaned_custom_values,
             "malformed_recurrence": malformed_recurrence,
+            "project_management": project_management,
             "missing_file_attachments": missing_attachments,
             "repair_preview": preview,
         }
@@ -767,6 +1071,7 @@ class Database:
         broken_parents = list(source_report.get("broken_parent_links") or [])
         orphaned_custom_values = dict(source_report.get("orphaned_custom_values") or {})
         malformed_recurrence = dict(source_report.get("malformed_recurrence") or {})
+        project_management = dict(source_report.get("project_management") or {})
 
         repaired = {
             "reset_broken_parent_links": 0,
@@ -776,6 +1081,11 @@ class Database:
             "deleted_invalid_recurrence_rules": 0,
             "cleared_invalid_task_recurrence_refs": 0,
             "cleared_invalid_generated_origins": 0,
+            "cleared_invalid_task_phase_refs": 0,
+            "deleted_invalid_pm_dependencies": 0,
+            "repaired_invalid_milestones": 0,
+            "repaired_invalid_deliverables": 0,
+            "repaired_invalid_register_entries": 0,
         }
 
         try:
@@ -849,6 +1159,150 @@ class Database:
                     )
                     repaired["cleared_invalid_generated_origins"] += int(cur.rowcount or 0)
 
+                for row in project_management.get("broken_task_phase_refs") or []:
+                    cur.execute(
+                        "UPDATE tasks SET phase_id=NULL, last_update=? WHERE id=?;",
+                        (stamp, int(row["id"])),
+                    )
+                    repaired["cleared_invalid_task_phase_refs"] += int(cur.rowcount or 0)
+
+                invalid_pm_ids = {
+                    int(row["id"])
+                    for row in (project_management.get("broken_pm_dependencies") or [])
+                    if row.get("id") is not None
+                }
+                for dep_id in sorted(invalid_pm_ids):
+                    cur.execute("DELETE FROM pm_dependencies WHERE id=?;", (int(dep_id),))
+                    repaired["deleted_invalid_pm_dependencies"] += int(cur.rowcount or 0)
+
+                for row in project_management.get("malformed_milestones") or []:
+                    milestone_id = int(row["id"])
+                    cur.execute(
+                        """
+                        SELECT id, project_task_id, phase_id, linked_task_id
+                        FROM milestones
+                        WHERE id=?;
+                        """,
+                        (milestone_id,),
+                    )
+                    current = cur.fetchone()
+                    if not current:
+                        continue
+                    project_ok = self._project_exists(int(current["project_task_id"]))
+                    if not project_ok:
+                        cur.execute("DELETE FROM milestones WHERE id=?;", (milestone_id,))
+                        repaired["repaired_invalid_milestones"] += int(cur.rowcount or 0)
+                        continue
+                    phase_id = current["phase_id"]
+                    if phase_id is not None:
+                        phase = self._phase_record(int(phase_id))
+                        if not phase or int(phase["project_task_id"]) != int(current["project_task_id"]):
+                            cur.execute("UPDATE milestones SET phase_id=NULL, updated_at=? WHERE id=?;", (stamp, milestone_id))
+                            repaired["repaired_invalid_milestones"] += int(cur.rowcount or 0)
+                    linked_task_id = current["linked_task_id"]
+                    if linked_task_id is not None and not self._task_in_project(
+                        int(linked_task_id),
+                        int(current["project_task_id"]),
+                    ):
+                        cur.execute(
+                            "UPDATE milestones SET linked_task_id=NULL, updated_at=? WHERE id=?;",
+                            (stamp, milestone_id),
+                        )
+                        repaired["repaired_invalid_milestones"] += int(cur.rowcount or 0)
+
+                for row in project_management.get("malformed_deliverables") or []:
+                    deliverable_id = int(row["id"])
+                    cur.execute(
+                        """
+                        SELECT id, project_task_id, phase_id, linked_task_id, linked_milestone_id
+                        FROM deliverables
+                        WHERE id=?;
+                        """,
+                        (deliverable_id,),
+                    )
+                    current = cur.fetchone()
+                    if not current:
+                        continue
+                    project_ok = self._project_exists(int(current["project_task_id"]))
+                    if not project_ok:
+                        cur.execute("DELETE FROM deliverables WHERE id=?;", (deliverable_id,))
+                        repaired["repaired_invalid_deliverables"] += int(cur.rowcount or 0)
+                        continue
+                    phase_id = current["phase_id"]
+                    if phase_id is not None:
+                        phase = self._phase_record(int(phase_id))
+                        if not phase or int(phase["project_task_id"]) != int(current["project_task_id"]):
+                            cur.execute(
+                                "UPDATE deliverables SET phase_id=NULL, updated_at=? WHERE id=?;",
+                                (stamp, deliverable_id),
+                            )
+                            repaired["repaired_invalid_deliverables"] += int(cur.rowcount or 0)
+                    linked_task_id = current["linked_task_id"]
+                    if linked_task_id is not None and not self._task_in_project(
+                        int(linked_task_id),
+                        int(current["project_task_id"]),
+                    ):
+                        cur.execute(
+                            "UPDATE deliverables SET linked_task_id=NULL, updated_at=? WHERE id=?;",
+                            (stamp, deliverable_id),
+                        )
+                        repaired["repaired_invalid_deliverables"] += int(cur.rowcount or 0)
+                    linked_milestone_id = current["linked_milestone_id"]
+                    if linked_milestone_id is not None and not self._milestone_in_project(
+                        int(linked_milestone_id),
+                        int(current["project_task_id"]),
+                    ):
+                        cur.execute(
+                            "UPDATE deliverables SET linked_milestone_id=NULL, updated_at=? WHERE id=?;",
+                            (stamp, deliverable_id),
+                        )
+                        repaired["repaired_invalid_deliverables"] += int(cur.rowcount or 0)
+
+                for row in project_management.get("malformed_register_entries") or []:
+                    entry_id = int(row["id"])
+                    cur.execute(
+                        """
+                        SELECT id, project_task_id, entry_type, linked_task_id, linked_milestone_id
+                        FROM project_register_entries
+                        WHERE id=?;
+                        """,
+                        (entry_id,),
+                    )
+                    current = cur.fetchone()
+                    if not current:
+                        continue
+                    project_ok = self._project_exists(int(current["project_task_id"]))
+                    if not project_ok:
+                        cur.execute("DELETE FROM project_register_entries WHERE id=?;", (entry_id,))
+                        repaired["repaired_invalid_register_entries"] += int(cur.rowcount or 0)
+                        continue
+                    if str(current["entry_type"] or "") not in REGISTER_ENTRY_TYPES:
+                        cur.execute(
+                            "UPDATE project_register_entries SET entry_type='risk', updated_at=? WHERE id=?;",
+                            (stamp, entry_id),
+                        )
+                        repaired["repaired_invalid_register_entries"] += int(cur.rowcount or 0)
+                    linked_task_id = current["linked_task_id"]
+                    if linked_task_id is not None and not self._task_in_project(
+                        int(linked_task_id),
+                        int(current["project_task_id"]),
+                    ):
+                        cur.execute(
+                            "UPDATE project_register_entries SET linked_task_id=NULL, updated_at=? WHERE id=?;",
+                            (stamp, entry_id),
+                        )
+                        repaired["repaired_invalid_register_entries"] += int(cur.rowcount or 0)
+                    linked_milestone_id = current["linked_milestone_id"]
+                    if linked_milestone_id is not None and not self._milestone_in_project(
+                        int(linked_milestone_id),
+                        int(current["project_task_id"]),
+                    ):
+                        cur.execute(
+                            "UPDATE project_register_entries SET linked_milestone_id=NULL, updated_at=? WHERE id=?;",
+                            (stamp, entry_id),
+                        )
+                        repaired["repaired_invalid_register_entries"] += int(cur.rowcount or 0)
+
                 sort_groups = self._invalid_sibling_sort_order_groups()
                 for group in sort_groups:
                     changed_in_group = 0
@@ -874,7 +1328,8 @@ class Database:
             len(post_report.get("invalid_sibling_sort_orders") or []) +
             len((post_report.get("orphaned_custom_values") or {}).get("missing_tasks") or []) +
             len((post_report.get("orphaned_custom_values") or {}).get("missing_columns") or []) +
-            sum(len(v) for v in (post_report.get("malformed_recurrence") or {}).values())
+            sum(len(v) for v in (post_report.get("malformed_recurrence") or {}).values()) +
+            sum(len(v) for v in (post_report.get("project_management") or {}).values())
         )
         repaired["post_report"] = post_report
         return repaired
@@ -996,7 +1451,8 @@ class Database:
                    effort_minutes, actual_minutes, timer_started_at,
                    waiting_for,
                    recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
-                   reminder_at, reminder_minutes_before, reminder_fired_at
+                   reminder_at, reminder_minutes_before, reminder_fired_at,
+                   start_date, phase_id
             FROM tasks
             ORDER BY COALESCE(parent_id, 0), sort_order ASC, id ASC;
             """
@@ -1056,12 +1512,23 @@ class Database:
         )
         recurrence_by_task = {int(r["task_id"]): dict(r) for r in cur.fetchall()}
 
+        cur.execute(
+            """
+            SELECT id, name, project_task_id
+            FROM project_phases;
+            """
+        )
+        phase_rows = {int(r["id"]): dict(r) for r in cur.fetchall()}
+
         for t in tasks:
             t["custom"] = values_by_task.get(t["id"], {})
             t["tags"] = tags_by_task.get(int(t["id"]), [])
             t["blocked_by_count"] = deps_by_task.get(int(t["id"]), 0)
             t["dependencies"] = dependency_ids_by_task.get(int(t["id"]), [])
             t["recurrence"] = recurrence_by_task.get(int(t["id"]))
+            phase = phase_rows.get(int(t.get("phase_id") or 0))
+            t["phase_name"] = str(phase.get("name") or "") if phase else ""
+            t["phase_project_task_id"] = int(phase["project_task_id"]) if phase and phase.get("project_task_id") is not None else None
         return tasks
 
     def fetch_task_by_id(self, task_id: int) -> dict | None:
@@ -1074,7 +1541,8 @@ class Database:
                    effort_minutes, actual_minutes, timer_started_at,
                    waiting_for,
                    recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
-                   reminder_at, reminder_minutes_before, reminder_fired_at
+                   reminder_at, reminder_minutes_before, reminder_fired_at,
+                   start_date, phase_id
             FROM tasks
             WHERE id=?;
             """,
@@ -1104,6 +1572,22 @@ class Database:
         task["blocked_by_count"] = int(dep_row["dep_count"]) if dep_row else 0
         task["dependencies"] = [int(d["id"]) for d in self.fetch_dependencies(int(task_id))]
 
+        if task.get("phase_id") is not None:
+            cur.execute(
+                """
+                SELECT id, name, project_task_id
+                FROM project_phases
+                WHERE id=?;
+                """,
+                (int(task["phase_id"]),),
+            )
+            phase = cur.fetchone()
+            task["phase_name"] = str(phase["name"]) if phase else ""
+            task["phase_project_task_id"] = int(phase["project_task_id"]) if phase and phase["project_task_id"] is not None else None
+        else:
+            task["phase_name"] = ""
+            task["phase_project_task_id"] = None
+
         cur.execute(
             """
             SELECT rr.id, rr.frequency, rr.create_next_on_done, rr.is_active
@@ -1124,6 +1608,10 @@ class Database:
         task["dependencies"] = self.fetch_dependencies(int(task_id))
         task["child_progress"] = self.child_progress(int(task_id))
         task["project_summary"] = self.project_health_for_task(int(task_id), stalled_days=14)
+        project_id = self.project_id_for_task(int(task_id))
+        task["project_id"] = project_id
+        task["project_profile"] = self.fetch_project_profile(int(project_id)) if project_id is not None else None
+        task["project_phases"] = self.fetch_project_phases(int(project_id)) if project_id is not None else []
         return task
 
     def fetch_task_snapshot(self, task_id: int) -> dict | None:
@@ -1212,7 +1700,9 @@ class Database:
                     is_generated_occurrence=?,
                     reminder_at=?,
                     reminder_minutes_before=?,
-                    reminder_fired_at=?
+                    reminder_fired_at=?,
+                    start_date=?,
+                    phase_id=?
                 WHERE id=?;
                 """,
                 (
@@ -1237,6 +1727,8 @@ class Database:
                     snapshot.get("reminder_at"),
                     snapshot.get("reminder_minutes_before"),
                     snapshot.get("reminder_fired_at"),
+                    snapshot.get("start_date"),
+                    snapshot.get("phase_id"),
                     tid,
                 ),
             )
@@ -1254,6 +1746,15 @@ class Database:
             self._set_task_tags_tx(cur, tid, snapshot.get("tags") or [])
 
             cur.execute("DELETE FROM task_dependencies WHERE task_id=?;", (tid,))
+            cur.execute(
+                """
+                DELETE FROM pm_dependencies
+                WHERE successor_kind='task'
+                  AND successor_id=?
+                  AND predecessor_kind='task';
+                """,
+                (tid,),
+            )
             for dep_id in deps:
                 cur.execute(
                     """
@@ -1262,6 +1763,22 @@ class Database:
                     ON CONFLICT(task_id, depends_on_task_id) DO NOTHING;
                     """,
                     (tid, int(dep_id)),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO pm_dependencies(
+                        predecessor_kind,
+                        predecessor_id,
+                        successor_kind,
+                        successor_id,
+                        dep_type,
+                        is_soft,
+                        created_at
+                    )
+                    VALUES('task', ?, 'task', ?, 'finish_to_start', 0, ?)
+                    ON CONFLICT(predecessor_kind, predecessor_id, successor_kind, successor_id, dep_type) DO NOTHING;
+                    """,
+                    (int(dep_id), tid, now_iso()),
                 )
 
             cur.execute("DELETE FROM task_attachments WHERE task_id=?;", (tid,))
@@ -1352,6 +1869,8 @@ class Database:
         task_data.setdefault("reminder_at", None)
         task_data.setdefault("reminder_minutes_before", None)
         task_data.setdefault("reminder_fired_at", None)
+        task_data.setdefault("start_date", None)
+        task_data.setdefault("phase_id", None)
 
         with self.tx():
             cur = self.conn.cursor()
@@ -1365,8 +1884,9 @@ class Database:
                                       effort_minutes, actual_minutes, timer_started_at,
                                       waiting_for,
                                       recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
-                                      reminder_at, reminder_minutes_before, reminder_fired_at)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      reminder_at, reminder_minutes_before, reminder_fired_at,
+                                      start_date, phase_id)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         task_data["id"], task_data["description"], task_data["due_date"], task_data["last_update"],
@@ -1385,6 +1905,8 @@ class Database:
                         task_data.get("reminder_at"),
                         task_data.get("reminder_minutes_before"),
                         task_data.get("reminder_fired_at"),
+                        task_data.get("start_date"),
+                        task_data.get("phase_id"),
                     ),
                 )
                 task_id = int(task_data["id"])
@@ -1397,8 +1919,9 @@ class Database:
                                       effort_minutes, actual_minutes, timer_started_at,
                                       waiting_for,
                                       recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
-                                      reminder_at, reminder_minutes_before, reminder_fired_at)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      reminder_at, reminder_minutes_before, reminder_fired_at,
+                                      start_date, phase_id)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         task_data["description"], task_data["due_date"], task_data["last_update"],
@@ -1417,6 +1940,8 @@ class Database:
                         task_data.get("reminder_at"),
                         task_data.get("reminder_minutes_before"),
                         task_data.get("reminder_fired_at"),
+                        task_data.get("start_date"),
+                        task_data.get("phase_id"),
                     ),
                 )
                 task_id = int(cur.lastrowid)
@@ -1441,6 +1966,14 @@ class Database:
     def delete_task(self, task_id: int):
         with self.tx():
             cur = self.conn.cursor()
+            cur.execute(
+                """
+                DELETE FROM pm_dependencies
+                WHERE (predecessor_kind='task' AND predecessor_id=?)
+                   OR (successor_kind='task' AND successor_id=?);
+                """,
+                (int(task_id), int(task_id)),
+            )
             cur.execute("DELETE FROM tasks WHERE id=?;", (int(task_id),))
 
     def update_task_field(self, task_id: int, field: str, value):
@@ -1462,6 +1995,8 @@ class Database:
             "recurrence_rule_id",
             "recurrence_origin_task_id",
             "is_generated_occurrence",
+            "start_date",
+            "phase_id",
         }
         if field not in allowed:
             raise ValueError("Invalid field")
@@ -1496,6 +2031,8 @@ class Database:
             "is_collapsed",
             "parent_id",
             "sort_order",
+            "start_date",
+            "phase_id",
         }
         pairs = []
         params = []
@@ -1682,6 +2219,140 @@ class Database:
             ORDER BY COALESCE(due_date, '9999-12-31') ASC, priority ASC, id ASC;
             """
         )
+
+        milestone_rows = _run(
+            """
+            SELECT m.id,
+                   m.title AS description,
+                   m.target_date AS due_date,
+                   COALESCE(t.priority, p.priority, 3) AS priority,
+                   m.status AS status,
+                   m.updated_at AS last_update,
+                   NULL AS archived_at,
+                   '' AS planned_bucket,
+                   '' AS waiting_for,
+                   p.id AS project_task_id,
+                   p.description AS project_name,
+                   t.id AS linked_task_id,
+                   t.description AS linked_task_description,
+                   pp.name AS phase_name
+            FROM milestones m
+            JOIN tasks p ON p.id = m.project_task_id
+            LEFT JOIN tasks t ON t.id = m.linked_task_id
+            LEFT JOIN project_phases pp ON pp.id = m.phase_id
+            WHERE m.status <> 'completed'
+              AND m.target_date IS NOT NULL
+              AND TRIM(m.target_date) <> ''
+              AND m.target_date < date('now', 'localtime')
+            ORDER BY m.target_date ASC, priority ASC, m.id ASC;
+            """
+        )
+        for row in milestone_rows:
+            focus_id = int(row.get("linked_task_id") or row.get("project_task_id") or 0)
+            row["review_focus_id"] = focus_id
+            row["review_key"] = f"milestone:{int(row.get('id') or 0)}"
+            project_name = str(row.get("project_name") or "").strip()
+            phase_name = str(row.get("phase_name") or "").strip()
+            linked = str(row.get("linked_task_description") or "").strip()
+            parts = []
+            if project_name:
+                parts.append(f"project: {project_name}")
+            if phase_name:
+                parts.append(f"phase: {phase_name}")
+            if linked:
+                parts.append(f"linked task: {linked}")
+            row["review_note"] = " | ".join(parts)
+        data["overdue_milestones"] = milestone_rows
+
+        deliverable_rows = _run(
+            """
+            SELECT d.id,
+                   d.title AS description,
+                   d.due_date AS due_date,
+                   COALESCE(t.priority, p.priority, 3) AS priority,
+                   d.status AS status,
+                   d.updated_at AS last_update,
+                   NULL AS archived_at,
+                   '' AS planned_bucket,
+                   '' AS waiting_for,
+                   p.id AS project_task_id,
+                   p.description AS project_name,
+                   t.id AS linked_task_id,
+                   t.description AS linked_task_description,
+                   m.title AS linked_milestone_title,
+                   pp.name AS phase_name
+            FROM deliverables d
+            JOIN tasks p ON p.id = d.project_task_id
+            LEFT JOIN tasks t ON t.id = d.linked_task_id
+            LEFT JOIN milestones m ON m.id = d.linked_milestone_id
+            LEFT JOIN project_phases pp ON pp.id = d.phase_id
+            WHERE d.status <> 'completed'
+              AND d.due_date IS NOT NULL
+              AND TRIM(d.due_date) <> ''
+              AND d.due_date <= date('now', 'localtime', '+7 day')
+            ORDER BY d.due_date ASC, priority ASC, d.id ASC;
+            """
+        )
+        for row in deliverable_rows:
+            focus_id = int(row.get("linked_task_id") or row.get("project_task_id") or 0)
+            row["review_focus_id"] = focus_id
+            row["review_key"] = f"deliverable:{int(row.get('id') or 0)}"
+            project_name = str(row.get("project_name") or "").strip()
+            phase_name = str(row.get("phase_name") or "").strip()
+            linked = str(row.get("linked_task_description") or row.get("linked_milestone_title") or "").strip()
+            parts = []
+            if project_name:
+                parts.append(f"project: {project_name}")
+            if phase_name:
+                parts.append(f"phase: {phase_name}")
+            if linked:
+                parts.append(f"linked: {linked}")
+            row["review_note"] = " | ".join(parts)
+        data["deliverables_due_soon"] = deliverable_rows
+
+        register_rows = _run(
+            """
+            SELECT r.id,
+                   r.title AS description,
+                   r.review_date AS due_date,
+                   COALESCE(r.severity, 0) AS priority,
+                   r.status AS status,
+                   r.updated_at AS last_update,
+                   NULL AS archived_at,
+                   '' AS planned_bucket,
+                   '' AS waiting_for,
+                   r.entry_type,
+                   r.severity,
+                   p.id AS project_task_id,
+                   p.description AS project_name,
+                   t.id AS linked_task_id,
+                   t.description AS linked_task_description,
+                   m.title AS linked_milestone_title
+            FROM project_register_entries r
+            JOIN tasks p ON p.id = r.project_task_id
+            LEFT JOIN tasks t ON t.id = r.linked_task_id
+            LEFT JOIN milestones m ON m.id = r.linked_milestone_id
+            WHERE r.status NOT IN ('resolved', 'accepted')
+              AND COALESCE(r.severity, 0) >= 4
+            ORDER BY COALESCE(r.severity, 0) DESC, COALESCE(r.review_date, '9999-12-31') ASC, r.id ASC;
+            """
+        )
+        for row in register_rows:
+            focus_id = int(row.get("linked_task_id") or row.get("project_task_id") or 0)
+            row["review_focus_id"] = focus_id
+            row["review_key"] = f"register:{int(row.get('id') or 0)}"
+            project_name = str(row.get("project_name") or "").strip()
+            linked = str(row.get("linked_task_description") or row.get("linked_milestone_title") or "").strip()
+            severity = int(row.get("severity") or 0)
+            parts = [f"type: {str(row.get('entry_type') or '').strip()}"]
+            if severity > 0:
+                parts.append(f"severity: {severity}")
+            if project_name:
+                parts.append(f"project: {project_name}")
+            if linked:
+                parts.append(f"linked: {linked}")
+            row["review_note"] = " | ".join(parts)
+        data["high_risk_registers"] = register_rows
 
         data["recent_done_archived"] = _run(
             f"""
@@ -2246,6 +2917,7 @@ class Database:
     def set_task_dependencies(self, task_id: int, depends_on_ids: list[int]):
         ids = []
         seen = set()
+        existing_edges = self._fetch_all_pm_dependencies()
         for raw in depends_on_ids or []:
             try:
                 tid = int(raw)
@@ -2253,6 +2925,9 @@ class Database:
                 continue
             if tid <= 0 or tid == int(task_id) or tid in seen:
                 continue
+            ok, reason = validate_dependency_graph(existing_edges, "task", tid, "task", int(task_id))
+            if not ok:
+                raise ValueError(reason)
             seen.add(tid)
             ids.append(tid)
 
@@ -2268,7 +2943,1077 @@ class Database:
                     """,
                     (int(task_id), int(dep_id)),
                 )
+            self._sync_task_dependency_edges_tx(cur, int(task_id), ids)
             cur.execute("UPDATE tasks SET last_update=? WHERE id=?;", (now_iso(), int(task_id)))
+
+    # ---------- Project management ----------
+    def project_id_for_task(self, task_id: int | None) -> int | None:
+        if task_id is None:
+            return None
+        tasks = {int(row["id"]): row for row in self.fetch_tasks() if row.get("id") is not None}
+        current = tasks.get(int(task_id))
+        if not current:
+            return None
+        profiled_ids = {int(row["task_id"]) for row in self.list_project_profiles()}
+        candidate = int(current["id"])
+        while current:
+            current_id = int(current["id"])
+            if current_id in profiled_ids:
+                return current_id
+            parent_id = current.get("parent_id")
+            if parent_id is None:
+                return current_id
+            current = tasks.get(int(parent_id))
+            candidate = current_id
+        return candidate
+
+    def fetch_project_task_ids(self, project_task_id: int) -> list[int]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            WITH RECURSIVE project_tree(id) AS (
+                SELECT id
+                FROM tasks
+                WHERE id=?
+                UNION ALL
+                SELECT t.id
+                FROM tasks t
+                JOIN project_tree pt ON t.parent_id = pt.id
+            )
+            SELECT id FROM project_tree ORDER BY id;
+            """,
+            (int(project_task_id),),
+        )
+        return [int(row["id"]) for row in cur.fetchall()]
+
+    def _project_exists(self, project_task_id: int) -> bool:
+        cur = self.conn.cursor()
+        cur.execute("SELECT 1 FROM tasks WHERE id=?;", (int(project_task_id),))
+        return cur.fetchone() is not None
+
+    def _phase_record(self, phase_id: int) -> dict | None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, project_task_id, name
+            FROM project_phases
+            WHERE id=?;
+            """,
+            (int(phase_id),),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def _task_in_project(self, task_id: int, project_task_id: int) -> bool:
+        return int(task_id) in set(self.fetch_project_task_ids(int(project_task_id)))
+
+    def _milestone_in_project(self, milestone_id: int, project_task_id: int) -> bool:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT 1
+            FROM milestones
+            WHERE id=? AND project_task_id=?;
+            """,
+            (int(milestone_id), int(project_task_id)),
+        )
+        return cur.fetchone() is not None
+
+    def list_project_profiles(self) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT pp.*, t.description AS project_name
+            FROM project_profiles pp
+            JOIN tasks t ON t.id = pp.task_id
+            ORDER BY LOWER(t.description), t.id;
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def list_project_candidates(self) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT t.id, t.description, t.status, t.priority, t.due_date, t.parent_id,
+                            CASE WHEN pp.task_id IS NOT NULL THEN 1 ELSE 0 END AS has_profile
+            FROM tasks t
+            LEFT JOIN project_profiles pp ON pp.task_id = t.id
+            WHERE t.parent_id IS NULL OR pp.task_id IS NOT NULL
+            ORDER BY LOWER(t.description), t.id;
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def _ensure_project_phase_defaults_tx(self, cur, project_task_id: int):
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM project_phases WHERE project_task_id=?;",
+            (int(project_task_id),),
+        )
+        row = cur.fetchone()
+        if int(row["c"] or 0) > 0:
+            return
+        stamp = now_iso()
+        for phase in default_phases_payload(int(project_task_id), stamp):
+            cur.execute(
+                """
+                INSERT INTO project_phases(project_task_id, name, sort_order, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?);
+                """,
+                (
+                    int(phase["project_task_id"]),
+                    str(phase["name"]),
+                    int(phase["sort_order"]),
+                    str(phase["created_at"]),
+                    str(phase["updated_at"]),
+                ),
+            )
+
+    def fetch_project_profile(self, project_task_id: int) -> dict | None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT pp.*, t.description AS project_name, t.status AS task_status, t.due_date AS task_due_date
+            FROM project_profiles pp
+            JOIN tasks t ON t.id = pp.task_id
+            WHERE pp.task_id=?;
+            """,
+            (int(project_task_id),),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def ensure_project_profile(self, project_task_id: int) -> dict:
+        existing = self.fetch_project_profile(int(project_task_id))
+        if existing:
+            with self.tx():
+                cur = self.conn.cursor()
+                self._ensure_project_phase_defaults_tx(cur, int(project_task_id))
+            return self.fetch_project_profile(int(project_task_id)) or existing
+        stamp = now_iso()
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO project_profiles(
+                    task_id,
+                    objective,
+                    scope,
+                    out_of_scope,
+                    owner,
+                    stakeholders,
+                    target_date,
+                    success_criteria,
+                    project_status_health,
+                    summary,
+                    category,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, '', '', '', 'Self', '', NULL, '', NULL, '', '', ?, ?);
+                """,
+                (int(project_task_id), stamp, stamp),
+            )
+            self._ensure_project_phase_defaults_tx(cur, int(project_task_id))
+        return self.fetch_project_profile(int(project_task_id)) or {"task_id": int(project_task_id)}
+
+    def save_project_profile(self, project_task_id: int, payload: dict) -> dict:
+        if not self._project_exists(int(project_task_id)):
+            raise ValueError("Project task not found.")
+        target_date = str(payload.get("target_date") or "").strip() or None
+        health = normalize_health(payload.get("project_status_health"))
+        with self.tx():
+            cur = self.conn.cursor()
+            self._ensure_project_phase_defaults_tx(cur, int(project_task_id))
+            cur.execute(
+                """
+                INSERT INTO project_profiles(
+                    task_id,
+                    objective,
+                    scope,
+                    out_of_scope,
+                    owner,
+                    stakeholders,
+                    target_date,
+                    success_criteria,
+                    project_status_health,
+                    summary,
+                    category,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(task_id) DO UPDATE SET
+                    objective=excluded.objective,
+                    scope=excluded.scope,
+                    out_of_scope=excluded.out_of_scope,
+                    owner=excluded.owner,
+                    stakeholders=excluded.stakeholders,
+                    target_date=excluded.target_date,
+                    success_criteria=excluded.success_criteria,
+                    project_status_health=excluded.project_status_health,
+                    summary=excluded.summary,
+                    category=excluded.category,
+                    updated_at=excluded.updated_at;
+                """,
+                (
+                    int(project_task_id),
+                    str(payload.get("objective") or ""),
+                    str(payload.get("scope") or ""),
+                    str(payload.get("out_of_scope") or ""),
+                    str(payload.get("owner") or "Self") or "Self",
+                    str(payload.get("stakeholders") or ""),
+                    target_date,
+                    str(payload.get("success_criteria") or ""),
+                    health,
+                    str(payload.get("summary") or ""),
+                    str(payload.get("category") or ""),
+                    now_iso(),
+                    now_iso(),
+                ),
+            )
+        return self.fetch_project_profile(int(project_task_id)) or {"task_id": int(project_task_id)}
+
+    def fetch_project_phases(self, project_task_id: int) -> list[dict]:
+        self.ensure_project_profile(int(project_task_id))
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, project_task_id, name, sort_order, created_at, updated_at
+            FROM project_phases
+            WHERE project_task_id=?
+            ORDER BY sort_order ASC, id ASC;
+            """,
+            (int(project_task_id),),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def add_project_phase(self, project_task_id: int, name: str) -> int:
+        phase_name = str(name or "").strip()
+        if not phase_name:
+            raise ValueError("Phase name is required.")
+        self.ensure_project_profile(int(project_task_id))
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order FROM project_phases WHERE project_task_id=?;",
+                (int(project_task_id),),
+            )
+            next_order = int(cur.fetchone()["next_order"])
+            cur.execute(
+                """
+                INSERT INTO project_phases(project_task_id, name, sort_order, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?);
+                """,
+                (int(project_task_id), phase_name, next_order, now_iso(), now_iso()),
+            )
+            return int(cur.lastrowid)
+
+    def update_project_phase(self, phase_id: int, name: str):
+        phase_name = str(name or "").strip()
+        if not phase_name:
+            raise ValueError("Phase name is required.")
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE project_phases SET name=?, updated_at=? WHERE id=?;",
+                (phase_name, now_iso(), int(phase_id)),
+            )
+
+    def delete_project_phase(self, phase_id: int):
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute("UPDATE tasks SET phase_id=NULL WHERE phase_id=?;", (int(phase_id),))
+            cur.execute("UPDATE milestones SET phase_id=NULL WHERE phase_id=?;", (int(phase_id),))
+            cur.execute("UPDATE deliverables SET phase_id=NULL WHERE phase_id=?;", (int(phase_id),))
+            cur.execute("DELETE FROM project_phases WHERE id=?;", (int(phase_id),))
+
+    def set_task_phase(self, task_id: int, phase_id: int | None):
+        phase_value = None if phase_id is None else int(phase_id)
+        if phase_value is not None:
+            project_task_id = self.project_id_for_task(int(task_id))
+            if project_task_id is None:
+                raise ValueError("Task not found.")
+            phase = self._phase_record(int(phase_value))
+            if not phase:
+                raise ValueError("Phase not found.")
+            if int(phase["project_task_id"]) != int(project_task_id):
+                raise ValueError("Selected phase does not belong to this task's project.")
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE tasks SET phase_id=?, last_update=? WHERE id=?;",
+                (phase_value, now_iso(), int(task_id)),
+            )
+
+    def fetch_project_dependencies(self, project_task_id: int) -> list[dict]:
+        task_ids = set(self.fetch_project_task_ids(int(project_task_id)))
+        milestone_ids = {int(row["id"]) for row in self.fetch_project_milestones(int(project_task_id))}
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, predecessor_kind, predecessor_id, successor_kind, successor_id, dep_type, is_soft, created_at
+            FROM pm_dependencies
+            ORDER BY predecessor_kind, predecessor_id, successor_kind, successor_id, id;
+            """
+        )
+        rows = []
+        for row in cur.fetchall():
+            item = dict(row)
+            pre_kind = str(item.get("predecessor_kind") or "")
+            succ_kind = str(item.get("successor_kind") or "")
+            pre_id = int(item.get("predecessor_id") or 0)
+            succ_id = int(item.get("successor_id") or 0)
+            in_project = (
+                (pre_kind == "task" and pre_id in task_ids) or
+                (pre_kind == "milestone" and pre_id in milestone_ids) or
+                (succ_kind == "task" and succ_id in task_ids) or
+                (succ_kind == "milestone" and succ_id in milestone_ids)
+            )
+            if in_project:
+                rows.append(item)
+        return rows
+
+    def fetch_dependencies_for_item(self, kind: str, item_id: int) -> list[dict]:
+        item_kind = str(kind or "").strip().lower()
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT pd.id, pd.predecessor_kind AS kind, pd.predecessor_id AS id,
+                   pd.dep_type, pd.is_soft
+            FROM pm_dependencies pd
+            WHERE pd.successor_kind=? AND pd.successor_id=?
+            ORDER BY pd.predecessor_kind, pd.predecessor_id, pd.id;
+            """,
+            (item_kind, int(item_id)),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def _pm_item_exists(self, kind: str, item_id: int) -> bool:
+        item_kind = str(kind or "").strip().lower()
+        cur = self.conn.cursor()
+        if item_kind == "task":
+            cur.execute("SELECT 1 FROM tasks WHERE id=?;", (int(item_id),))
+            return cur.fetchone() is not None
+        if item_kind == "milestone":
+            cur.execute("SELECT 1 FROM milestones WHERE id=?;", (int(item_id),))
+            return cur.fetchone() is not None
+        return False
+
+    def _fetch_all_pm_dependencies(self) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, predecessor_kind, predecessor_id, successor_kind, successor_id, dep_type, is_soft, created_at
+            FROM pm_dependencies;
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def _sync_task_dependency_edges_tx(self, cur, task_id: int, depends_on_ids: list[int]):
+        cur.execute(
+            """
+            DELETE FROM pm_dependencies
+            WHERE successor_kind='task'
+              AND successor_id=?
+              AND predecessor_kind='task';
+            """,
+            (int(task_id),),
+        )
+        for dep_id in depends_on_ids:
+            cur.execute(
+                """
+                INSERT INTO pm_dependencies(
+                    predecessor_kind,
+                    predecessor_id,
+                    successor_kind,
+                    successor_id,
+                    dep_type,
+                    is_soft,
+                    created_at
+                )
+                VALUES('task', ?, 'task', ?, ?, 0, ?)
+                ON CONFLICT(predecessor_kind, predecessor_id, successor_kind, successor_id, dep_type) DO NOTHING;
+                """,
+                (int(dep_id), int(task_id), DEPENDENCY_TYPE_FINISH_TO_START, now_iso()),
+            )
+
+    def set_milestone_dependencies(self, milestone_id: int, dependency_refs: list[dict]):
+        refs = normalize_dependency_refs(dependency_refs)
+        if not self._pm_item_exists("milestone", int(milestone_id)):
+            raise ValueError("Milestone not found.")
+        existing_edges = self._fetch_all_pm_dependencies()
+        for ref in refs:
+            if not self._pm_item_exists(str(ref["kind"]), int(ref["id"])):
+                raise ValueError("Dependency target does not exist.")
+            ok, reason = validate_dependency_graph(
+                existing_edges,
+                str(ref["kind"]),
+                int(ref["id"]),
+                "milestone",
+                int(milestone_id),
+            )
+            if not ok:
+                raise ValueError(reason)
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                "DELETE FROM pm_dependencies WHERE successor_kind='milestone' AND successor_id=?;",
+                (int(milestone_id),),
+            )
+            for ref in refs:
+                cur.execute(
+                    """
+                    INSERT INTO pm_dependencies(
+                        predecessor_kind,
+                        predecessor_id,
+                        successor_kind,
+                        successor_id,
+                        dep_type,
+                        is_soft,
+                        created_at
+                    )
+                    VALUES(?, ?, 'milestone', ?, ?, 0, ?)
+                    ON CONFLICT(predecessor_kind, predecessor_id, successor_kind, successor_id, dep_type) DO NOTHING;
+                    """,
+                    (
+                        str(ref["kind"]),
+                        int(ref["id"]),
+                        int(milestone_id),
+                        DEPENDENCY_TYPE_FINISH_TO_START,
+                        now_iso(),
+                    ),
+                )
+
+    def fetch_project_milestones(self, project_task_id: int) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT m.id, m.project_task_id, m.title, m.description, m.phase_id, m.linked_task_id,
+                   m.start_date, m.target_date, m.baseline_target_date,
+                   m.status, m.progress_percent, m.completed_at, m.created_at, m.updated_at,
+                   pp.name AS phase_name,
+                   t.description AS linked_task_description
+            FROM milestones m
+            LEFT JOIN project_phases pp ON pp.id = m.phase_id
+            LEFT JOIN tasks t ON t.id = m.linked_task_id
+            WHERE m.project_task_id=?
+            ORDER BY COALESCE(m.target_date, '9999-12-31') ASC, m.id ASC;
+            """,
+            (int(project_task_id),),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+        task_rows = {int(row["id"]): row for row in self.fetch_tasks() if row.get("id") is not None}
+        milestone_rows = {int(row["id"]): row for row in rows if row.get("id") is not None}
+        for row in rows:
+            deps = self.fetch_dependencies_for_item("milestone", int(row["id"]))
+            row["dependencies"] = deps
+            row["is_blocked"] = is_dependency_blocked(
+                dependencies=deps,
+                tasks_by_id=task_rows,
+                milestones_by_id=milestone_rows,
+            )
+        return rows
+
+    def fetch_milestone_by_id(self, milestone_id: int) -> dict | None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT *
+            FROM milestones
+            WHERE id=?;
+            """,
+            (int(milestone_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["dependencies"] = self.fetch_dependencies_for_item("milestone", int(milestone_id))
+        return item
+
+    def upsert_milestone(self, payload: dict) -> int:
+        status = normalize_record_status(payload.get("status"), MILESTONE_STATUSES, "planned")
+        progress = max(0, min(100, int(payload.get("progress_percent") or 0)))
+        if status == "completed":
+            progress = 100
+        milestone_id = payload.get("id")
+        current = self.fetch_milestone_by_id(int(milestone_id)) if milestone_id else None
+        project_task_id = payload.get("project_task_id")
+        if project_task_id is None and current is not None:
+            project_task_id = current.get("project_task_id")
+        if project_task_id is None or not self._project_exists(int(project_task_id)):
+            raise ValueError("Milestone must belong to a valid project.")
+
+        phase_id = payload.get("phase_id")
+        if phase_id is not None:
+            phase = self._phase_record(int(phase_id))
+            if not phase or int(phase["project_task_id"]) != int(project_task_id):
+                raise ValueError("Milestone phase must belong to the same project.")
+
+        linked_task_id = payload.get("linked_task_id")
+        if linked_task_id is not None and not self._task_in_project(int(linked_task_id), int(project_task_id)):
+            raise ValueError("Linked task must belong to the same project.")
+
+        with self.tx():
+            cur = self.conn.cursor()
+            if milestone_id:
+                cur.execute(
+                    """
+                    UPDATE milestones
+                    SET title=?, description=?, phase_id=?, linked_task_id=?, start_date=?, target_date=?,
+                        baseline_target_date=?, status=?, progress_percent=?, completed_at=?, updated_at=?
+                    WHERE id=?;
+                    """,
+                    (
+                        str(payload.get("title") or ""),
+                        str(payload.get("description") or ""),
+                        payload.get("phase_id"),
+                        payload.get("linked_task_id"),
+                        payload.get("start_date"),
+                        payload.get("target_date"),
+                        payload.get("baseline_target_date"),
+                        status,
+                        progress,
+                        payload.get("completed_at"),
+                        now_iso(),
+                        int(milestone_id),
+                    ),
+                )
+                target_id = int(milestone_id)
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO milestones(
+                        project_task_id,
+                        title,
+                        description,
+                        phase_id,
+                        linked_task_id,
+                        start_date,
+                        target_date,
+                        baseline_target_date,
+                        status,
+                        progress_percent,
+                        completed_at,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        int(project_task_id),
+                        str(payload.get("title") or ""),
+                        str(payload.get("description") or ""),
+                        payload.get("phase_id"),
+                        payload.get("linked_task_id"),
+                        payload.get("start_date"),
+                        payload.get("target_date"),
+                        payload.get("baseline_target_date"),
+                        status,
+                        progress,
+                        payload.get("completed_at"),
+                        now_iso(),
+                        now_iso(),
+                    ),
+                )
+                target_id = int(cur.lastrowid)
+        self.set_milestone_dependencies(int(target_id), payload.get("dependencies") or [])
+        return int(target_id)
+
+    def delete_milestone(self, milestone_id: int):
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                DELETE FROM pm_dependencies
+                WHERE (predecessor_kind='milestone' AND predecessor_id=?)
+                   OR (successor_kind='milestone' AND successor_id=?);
+                """,
+                (int(milestone_id), int(milestone_id)),
+            )
+            cur.execute("DELETE FROM milestones WHERE id=?;", (int(milestone_id),))
+
+    def restore_milestone_snapshot(self, snapshot: dict):
+        if not snapshot or snapshot.get("id") is None:
+            return
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO milestones(
+                    id,
+                    project_task_id,
+                    title,
+                    description,
+                    phase_id,
+                    linked_task_id,
+                    start_date,
+                    target_date,
+                    baseline_target_date,
+                    status,
+                    progress_percent,
+                    completed_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    project_task_id=excluded.project_task_id,
+                    title=excluded.title,
+                    description=excluded.description,
+                    phase_id=excluded.phase_id,
+                    linked_task_id=excluded.linked_task_id,
+                    start_date=excluded.start_date,
+                    target_date=excluded.target_date,
+                    baseline_target_date=excluded.baseline_target_date,
+                    status=excluded.status,
+                    progress_percent=excluded.progress_percent,
+                    completed_at=excluded.completed_at,
+                    created_at=excluded.created_at,
+                    updated_at=excluded.updated_at;
+                """,
+                (
+                    int(snapshot["id"]),
+                    int(snapshot["project_task_id"]),
+                    str(snapshot.get("title") or ""),
+                    str(snapshot.get("description") or ""),
+                    snapshot.get("phase_id"),
+                    snapshot.get("linked_task_id"),
+                    snapshot.get("start_date"),
+                    snapshot.get("target_date"),
+                    snapshot.get("baseline_target_date"),
+                    str(snapshot.get("status") or "planned"),
+                    int(snapshot.get("progress_percent") or 0),
+                    snapshot.get("completed_at"),
+                    snapshot.get("created_at") or now_iso(),
+                    snapshot.get("updated_at") or now_iso(),
+                ),
+            )
+        self.set_milestone_dependencies(
+            int(snapshot["id"]),
+            list(snapshot.get("dependencies") or []),
+        )
+
+    def fetch_project_deliverables(self, project_task_id: int) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT d.id, d.project_task_id, d.title, d.description, d.phase_id, d.linked_task_id,
+                   d.linked_milestone_id, d.due_date, d.baseline_due_date, d.acceptance_criteria,
+                   d.version_ref, d.status, d.completed_at, d.created_at, d.updated_at,
+                   pp.name AS phase_name,
+                   t.description AS linked_task_description,
+                   m.title AS linked_milestone_title
+            FROM deliverables d
+            LEFT JOIN project_phases pp ON pp.id = d.phase_id
+            LEFT JOIN tasks t ON t.id = d.linked_task_id
+            LEFT JOIN milestones m ON m.id = d.linked_milestone_id
+            WHERE d.project_task_id=?
+            ORDER BY COALESCE(d.due_date, '9999-12-31') ASC, d.id ASC;
+            """,
+            (int(project_task_id),),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def fetch_deliverable_by_id(self, deliverable_id: int) -> dict | None:
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM deliverables WHERE id=?;", (int(deliverable_id),))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def upsert_deliverable(self, payload: dict) -> int:
+        status = normalize_record_status(payload.get("status"), DELIVERABLE_STATUSES, "planned")
+        deliverable_id = payload.get("id")
+        current = self.fetch_deliverable_by_id(int(deliverable_id)) if deliverable_id else None
+        project_task_id = payload.get("project_task_id")
+        if project_task_id is None and current is not None:
+            project_task_id = current.get("project_task_id")
+        if project_task_id is None or not self._project_exists(int(project_task_id)):
+            raise ValueError("Deliverable must belong to a valid project.")
+
+        phase_id = payload.get("phase_id")
+        if phase_id is not None:
+            phase = self._phase_record(int(phase_id))
+            if not phase or int(phase["project_task_id"]) != int(project_task_id):
+                raise ValueError("Deliverable phase must belong to the same project.")
+
+        linked_task_id = payload.get("linked_task_id")
+        if linked_task_id is not None and not self._task_in_project(int(linked_task_id), int(project_task_id)):
+            raise ValueError("Linked task must belong to the same project.")
+
+        linked_milestone_id = payload.get("linked_milestone_id")
+        if linked_milestone_id is not None and not self._milestone_in_project(
+            int(linked_milestone_id),
+            int(project_task_id),
+        ):
+            raise ValueError("Linked milestone must belong to the same project.")
+
+        with self.tx():
+            cur = self.conn.cursor()
+            if deliverable_id:
+                cur.execute(
+                    """
+                    UPDATE deliverables
+                    SET title=?, description=?, phase_id=?, linked_task_id=?, linked_milestone_id=?,
+                        due_date=?, baseline_due_date=?, acceptance_criteria=?, version_ref=?,
+                        status=?, completed_at=?, updated_at=?
+                    WHERE id=?;
+                    """,
+                    (
+                        str(payload.get("title") or ""),
+                        str(payload.get("description") or ""),
+                        payload.get("phase_id"),
+                        payload.get("linked_task_id"),
+                        payload.get("linked_milestone_id"),
+                        payload.get("due_date"),
+                        payload.get("baseline_due_date"),
+                        str(payload.get("acceptance_criteria") or ""),
+                        str(payload.get("version_ref") or ""),
+                        status,
+                        payload.get("completed_at"),
+                        now_iso(),
+                        int(deliverable_id),
+                    ),
+                )
+                return int(deliverable_id)
+
+            cur.execute(
+                """
+                INSERT INTO deliverables(
+                    project_task_id,
+                    title,
+                    description,
+                    phase_id,
+                    linked_task_id,
+                    linked_milestone_id,
+                    due_date,
+                    baseline_due_date,
+                    acceptance_criteria,
+                    version_ref,
+                    status,
+                    completed_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    int(project_task_id),
+                    str(payload.get("title") or ""),
+                    str(payload.get("description") or ""),
+                    payload.get("phase_id"),
+                    payload.get("linked_task_id"),
+                    payload.get("linked_milestone_id"),
+                    payload.get("due_date"),
+                    payload.get("baseline_due_date"),
+                    str(payload.get("acceptance_criteria") or ""),
+                    str(payload.get("version_ref") or ""),
+                    status,
+                    payload.get("completed_at"),
+                    now_iso(),
+                    now_iso(),
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def delete_deliverable(self, deliverable_id: int):
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute("DELETE FROM deliverables WHERE id=?;", (int(deliverable_id),))
+
+    def restore_deliverable_snapshot(self, snapshot: dict):
+        if not snapshot or snapshot.get("id") is None:
+            return
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO deliverables(
+                    id,
+                    project_task_id,
+                    title,
+                    description,
+                    phase_id,
+                    linked_task_id,
+                    linked_milestone_id,
+                    due_date,
+                    baseline_due_date,
+                    acceptance_criteria,
+                    version_ref,
+                    status,
+                    completed_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    project_task_id=excluded.project_task_id,
+                    title=excluded.title,
+                    description=excluded.description,
+                    phase_id=excluded.phase_id,
+                    linked_task_id=excluded.linked_task_id,
+                    linked_milestone_id=excluded.linked_milestone_id,
+                    due_date=excluded.due_date,
+                    baseline_due_date=excluded.baseline_due_date,
+                    acceptance_criteria=excluded.acceptance_criteria,
+                    version_ref=excluded.version_ref,
+                    status=excluded.status,
+                    completed_at=excluded.completed_at,
+                    created_at=excluded.created_at,
+                    updated_at=excluded.updated_at;
+                """,
+                (
+                    int(snapshot["id"]),
+                    int(snapshot["project_task_id"]),
+                    str(snapshot.get("title") or ""),
+                    str(snapshot.get("description") or ""),
+                    snapshot.get("phase_id"),
+                    snapshot.get("linked_task_id"),
+                    snapshot.get("linked_milestone_id"),
+                    snapshot.get("due_date"),
+                    snapshot.get("baseline_due_date"),
+                    str(snapshot.get("acceptance_criteria") or ""),
+                    str(snapshot.get("version_ref") or ""),
+                    str(snapshot.get("status") or "planned"),
+                    snapshot.get("completed_at"),
+                    snapshot.get("created_at") or now_iso(),
+                    snapshot.get("updated_at") or now_iso(),
+                ),
+            )
+
+    def fetch_project_register_entries(self, project_task_id: int, entry_type: str | None = None) -> list[dict]:
+        cur = self.conn.cursor()
+        if entry_type:
+            cur.execute(
+                """
+                SELECT pre.*, t.description AS linked_task_description, m.title AS linked_milestone_title
+                FROM project_register_entries pre
+                LEFT JOIN tasks t ON t.id = pre.linked_task_id
+                LEFT JOIN milestones m ON m.id = pre.linked_milestone_id
+                WHERE pre.project_task_id=? AND pre.entry_type=?
+                ORDER BY pre.created_at DESC, pre.id DESC;
+                """,
+                (int(project_task_id), normalize_register_type(entry_type)),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT pre.*, t.description AS linked_task_description, m.title AS linked_milestone_title
+                FROM project_register_entries pre
+                LEFT JOIN tasks t ON t.id = pre.linked_task_id
+                LEFT JOIN milestones m ON m.id = pre.linked_milestone_id
+                WHERE pre.project_task_id=?
+                ORDER BY pre.created_at DESC, pre.id DESC;
+                """,
+                (int(project_task_id),),
+            )
+        return [dict(row) for row in cur.fetchall()]
+
+    def fetch_register_entry_by_id(self, entry_id: int) -> dict | None:
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM project_register_entries WHERE id=?;", (int(entry_id),))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def upsert_project_register_entry(self, payload: dict) -> int:
+        entry_type = normalize_register_type(payload.get("entry_type"))
+        status = normalize_record_status(payload.get("status"), REGISTER_STATUSES, "open")
+        entry_id = payload.get("id")
+        current = self.fetch_register_entry_by_id(int(entry_id)) if entry_id else None
+        project_task_id = payload.get("project_task_id")
+        if project_task_id is None and current is not None:
+            project_task_id = current.get("project_task_id")
+        if project_task_id is None or not self._project_exists(int(project_task_id)):
+            raise ValueError("Register entry must belong to a valid project.")
+
+        linked_task_id = payload.get("linked_task_id")
+        if linked_task_id is not None and not self._task_in_project(int(linked_task_id), int(project_task_id)):
+            raise ValueError("Linked task must belong to the same project.")
+
+        linked_milestone_id = payload.get("linked_milestone_id")
+        if linked_milestone_id is not None and not self._milestone_in_project(
+            int(linked_milestone_id),
+            int(project_task_id),
+        ):
+            raise ValueError("Linked milestone must belong to the same project.")
+
+        with self.tx():
+            cur = self.conn.cursor()
+            if entry_id:
+                cur.execute(
+                    """
+                    UPDATE project_register_entries
+                    SET entry_type=?, title=?, details=?, status=?, severity=?, review_date=?,
+                        linked_task_id=?, linked_milestone_id=?, updated_at=?
+                    WHERE id=?;
+                    """,
+                    (
+                        entry_type,
+                        str(payload.get("title") or ""),
+                        str(payload.get("details") or ""),
+                        status,
+                        payload.get("severity"),
+                        payload.get("review_date"),
+                        payload.get("linked_task_id"),
+                        payload.get("linked_milestone_id"),
+                        now_iso(),
+                        int(entry_id),
+                    ),
+                )
+                return int(entry_id)
+
+            cur.execute(
+                """
+                INSERT INTO project_register_entries(
+                    project_task_id,
+                    entry_type,
+                    title,
+                    details,
+                    status,
+                    severity,
+                    review_date,
+                    linked_task_id,
+                    linked_milestone_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    int(project_task_id),
+                    entry_type,
+                    str(payload.get("title") or ""),
+                    str(payload.get("details") or ""),
+                    status,
+                    payload.get("severity"),
+                    payload.get("review_date"),
+                    payload.get("linked_task_id"),
+                    payload.get("linked_milestone_id"),
+                    now_iso(),
+                    now_iso(),
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def delete_project_register_entry(self, entry_id: int):
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute("DELETE FROM project_register_entries WHERE id=?;", (int(entry_id),))
+
+    def fetch_project_baseline(self, project_task_id: int) -> dict | None:
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM project_baselines WHERE project_task_id=?;", (int(project_task_id),))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def save_project_baseline(self, project_task_id: int, target_date: str | None, effort_minutes: int | None):
+        if not self._project_exists(int(project_task_id)):
+            raise ValueError("Project task not found.")
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO project_baselines(project_task_id, target_date, effort_minutes, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(project_task_id) DO UPDATE SET
+                    target_date=excluded.target_date,
+                    effort_minutes=excluded.effort_minutes,
+                    updated_at=excluded.updated_at;
+                """,
+                (
+                    int(project_task_id),
+                    str(target_date or "").strip() or None,
+                    None if effort_minutes is None else int(effort_minutes),
+                    now_iso(),
+                    now_iso(),
+                ),
+            )
+
+    def fetch_project_dashboard(
+        self,
+        project_task_id: int,
+        *,
+        ensure_profile: bool = True,
+    ) -> dict | None:
+        project_task = self.fetch_task_by_id(int(project_task_id))
+        if not project_task:
+            return None
+        if ensure_profile:
+            profile = self.ensure_project_profile(int(project_task_id))
+            phases = self.fetch_project_phases(int(project_task_id))
+        else:
+            profile = self.fetch_project_profile(int(project_task_id))
+            phases = self.fetch_project_phases(int(project_task_id)) if profile else []
+        task_ids = set(self.fetch_project_task_ids(int(project_task_id)))
+        tasks = [row for row in self.fetch_tasks() if int(row["id"]) in task_ids]
+        milestones = self.fetch_project_milestones(int(project_task_id))
+        deliverables = self.fetch_project_deliverables(int(project_task_id))
+        register_entries = self.fetch_project_register_entries(int(project_task_id))
+        baseline = self.fetch_project_baseline(int(project_task_id))
+        dependency_rows = self.fetch_project_dependencies(int(project_task_id))
+        dependency_map: dict[tuple[str, int], list[dict]] = {}
+        for row in dependency_rows:
+            key = (str(row.get("successor_kind") or ""), int(row.get("successor_id") or 0))
+            dependency_map.setdefault(key, []).append(
+                {
+                    "id": int(row.get("predecessor_id") or 0),
+                    "kind": str(row.get("predecessor_kind") or ""),
+                    "dep_type": str(row.get("dep_type") or DEPENDENCY_TYPE_FINISH_TO_START),
+                    "is_soft": int(row.get("is_soft") or 0),
+                }
+            )
+        summary = build_project_summary(
+            project_task,
+            profile,
+            phases,
+            tasks,
+            milestones,
+            deliverables,
+            register_entries,
+            baseline,
+            dependency_map,
+            today=date.today(),
+        )
+        timeline_rows = build_timeline_rows(project_task, phases, tasks, milestones, deliverables, summary)
+        capacity = compute_personal_capacity(tasks, today=date.today())
+        return {
+            "project": project_task,
+            "profile": profile,
+            "phases": phases,
+            "tasks": tasks,
+            "milestones": milestones,
+            "deliverables": deliverables,
+            "register_entries": register_entries,
+            "baseline": baseline,
+            "dependencies": dependency_rows,
+            "summary": summary,
+            "timeline_rows": timeline_rows,
+            "capacity": capacity,
+        }
+
+    def fetch_project_health_overview(self) -> dict[int, dict]:
+        out: dict[int, dict] = {}
+        for row in self.list_project_candidates():
+            try:
+                project_task_id = int(row["id"])
+            except Exception:
+                continue
+            dashboard = self.fetch_project_dashboard(project_task_id, ensure_profile=False)
+            if not dashboard:
+                continue
+            summary = dashboard.get("summary") or {}
+            out[project_task_id] = {
+                "effective_health": str(summary.get("effective_health") or ""),
+                "effective_health_label": str(summary.get("effective_health_label") or ""),
+                "manual_health": summary.get("manual_health"),
+                "inferred_health": summary.get("inferred_health"),
+                "blocked_task_count": int(summary.get("blocked_task_count") or 0),
+                "blocked_milestone_count": int(summary.get("blocked_milestone_count") or 0),
+                "milestone_overdue_count": int(summary.get("milestone_overdue_count") or 0),
+                "deliverables_due_soon": int(summary.get("deliverables_due_soon") or 0),
+            }
+        return out
 
     # ---------- Saved filter views ----------
     def list_saved_filter_views(self) -> list[dict]:

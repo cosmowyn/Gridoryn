@@ -197,6 +197,7 @@ class DiagnosticsDialog(QDialog):
             f"Sibling groups to normalize: {int(preview.get('normalize_sort_order_groups') or 0)}",
             f"Orphaned custom values to delete: {int(preview.get('delete_orphaned_custom_values') or 0)}",
             f"Recurrence records to repair: {int(preview.get('repair_recurrence_records') or 0)}",
+            f"Project-management records to repair: {int(preview.get('repair_project_management_records') or 0)}",
         ]
         self.details_text.setPlainText("Repair preview\n\n" + "\n".join(lines))
 
@@ -265,6 +266,8 @@ class DiagnosticsDialog(QDialog):
             f"Invalid recurrence rules deleted: {int(result.get('deleted_invalid_recurrence_rules') or 0)}",
             f"Invalid task recurrence refs cleared: {int(result.get('cleared_invalid_task_recurrence_refs') or 0)}",
             f"Invalid generated origins cleared: {int(result.get('cleared_invalid_generated_origins') or 0)}",
+            f"Invalid task phase refs cleared: {int(result.get('cleared_invalid_task_phase_refs') or 0)}",
+            f"Invalid PM dependencies deleted: {int(result.get('deleted_invalid_pm_dependencies') or 0)}",
             f"Remaining repairable issues: {int(result.get('remaining_issue_count') or 0)}",
         ]
         QMessageBox.information(self, "Repair completed", "\n".join(lines))

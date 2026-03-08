@@ -27,6 +27,8 @@ Current app version: `v1.0.0`
 - Built-in perspectives: All, Today, Upcoming, Inbox, Someday, and Completed / Archive
 - Advanced search syntax and filter dock
 - Saved filter views
+- Project cockpit for charters, phases, milestones, deliverables, baselines, and structured project registers
+- Lightweight project timeline / Gantt-style planning for dated tasks, milestones, and deliverables
 - Guided review workflow for overdue, inbox, stalled, waiting, recurring, and archive review
 - Focus mode for short actionable work lists
 - Calendar / agenda view with due-date activity markers
@@ -36,10 +38,22 @@ Current app version: `v1.0.0`
 ### Task details and metadata
 
 - Notes, tags, waiting context, dependencies, recurrence, effort estimates, actual time, and timer support
+- Start dates and project phases for timeline-friendly task planning
 - Attachments to files and folders
 - Local reminders with grouped reminder popups, snoozing, reminder modes, and reminder history flags
 - Custom columns with typed editors, including date pickers and editable list values
 - Reusable templates with placeholder variables
+
+### Personal project management
+
+- Project charter/definition fields for objective, scope, out-of-scope, owner, stakeholders, target date, success criteria, summary/background, category, and health override
+- Default and per-project phases for intake, planning, execution, testing, approval, and closure
+- First-class milestones with dependencies, progress, target dates, baseline dates, linked tasks, and completion state
+- First-class deliverables with due date, acceptance criteria, version/reference, linked work, and lifecycle status
+- Structured risk, issue, assumption, and decision registers
+- Baseline target-date and effort tracking with current-versus-baseline variance
+- Personal workload summaries by day/week with overcommitment warnings
+- Hybrid project health logic combining manual override with inferred signals from blockers, overdue work, inactivity, and scope drift cues
 
 ### Safety, diagnostics, and portability
 
@@ -127,8 +141,9 @@ Typical usage flow:
 1. Capture tasks with Quick add, Quick capture, or the command palette
 2. Organize tasks in the tree, details panel, and built-in perspectives
 3. Review the system with Filters, Saved Views, Focus mode, and Review Workflow
-4. Inspect project health through next-action, stalled, and relationship views
-5. Protect data through snapshots, backups, diagnostics, and the application log
+4. Use the Project cockpit for charters, phases, milestones, deliverables, registers, timeline planning, and workload
+5. Inspect project health through next-action, stalled, relationship, and analytics views
+6. Protect data through snapshots, backups, diagnostics, and the application log
 
 ## Data, Safety, and Storage
 
@@ -149,6 +164,7 @@ Safety features currently included:
 - automatic restore-point snapshots with rotation
 - snapshot restore into a separate database copy or separate workspace
 - in-app log viewing for failures and high-risk operations
+- defensive validation for project phases, milestones, deliverables, register entries, and dependency references
 
 ## Backup and Theme Portability
 
@@ -187,6 +203,7 @@ Notes:
 The repository includes an automated `pytest` suite covering critical application logic, including:
 
 - database creation, migrations, recurrence persistence, integrity checks, and restore-point helpers
+- project-management entities, dependency validation, baseline variance, timeline generation, and workload summaries
 - tree model behavior, ordering, undo/redo behavior, filtering, and project intelligence logic
 - backup import/export and theme import/export
 - quick-add parsing, capture parsing, templates, workspace profiles, and demo data generation
@@ -251,6 +268,7 @@ capture_parsing.py        Capture intent parsing
 capture_actions.py        Capture intent execution routing
 filter_proxy.py           Tree filtering and perspectives
 project_intelligence.py   Next-action, stalled, blocked, and workload analysis
+project_management.py     Project-management logic helpers and summary/timeline calculations
 workflow_assist.py        Review and workflow acknowledgement helpers
 template_params.py        Template placeholder parsing and substitution
 
@@ -264,6 +282,7 @@ filters_ui.py             Filter dock
 review_ui.py              Review workflow dock
 focus_ui.py               Focus mode dock
 analytics_ui.py           Analytics dashboard dock
+project_cockpit_ui.py     Project cockpit dock for charters, phases, milestones, deliverables, registers, and timeline
 relationships_ui.py       Relationship inspector dock
 diagnostics_ui.py         Diagnostics dialog
 log_viewer_ui.py          In-app application log viewer

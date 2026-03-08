@@ -14,6 +14,10 @@ def test_populate_demo_database_creates_rich_sample_data(tmp_path):
     summary = populate_demo_database(db, today=date(2026, 3, 7))
 
     assert summary["task_count"] >= 10
+    assert summary["project_count"] >= 2
+    assert summary["milestone_count"] >= 3
+    assert summary["deliverable_count"] >= 1
+    assert summary["register_count"] >= 4
     assert summary["archived_count"] >= 1
     assert summary["recurring_count"] >= 1
     assert summary["saved_view_count"] >= 3
@@ -23,7 +27,10 @@ def test_populate_demo_database_creates_rich_sample_data(tmp_path):
     assert any(task.get("parent_id") is not None for task in tasks)
     assert any(str(task.get("waiting_for") or "").strip() for task in tasks)
     assert any(task.get("recurrence") for task in tasks)
+    assert any(str(task.get("start_date") or "").strip() for task in tasks)
+    assert any(task.get("phase_id") is not None for task in tasks)
     assert len(db.fetch_custom_columns()) >= 3
+    assert len(db.list_project_profiles()) >= 2
     assert db.load_template("Demo: Meeting follow-up") is not None
     assert db.load_filter_view("Demo: Inbox triage") is not None
 
@@ -53,8 +60,17 @@ def test_create_demo_workspace_is_safe_and_recreatable(tmp_path):
 def test_build_demo_payload_contains_expected_capabilities():
     payload = build_demo_payload(today=date(2026, 3, 7))
 
+    assert payload["format_version"] == 3
+    assert payload["schema_user_version"] == 5
     assert len(payload["custom_columns"]) >= 3
     assert len(payload["tasks"]) >= 10
     assert payload["recurrence_rules"]
+    assert payload["project_profiles"]
+    assert payload["project_phases"]
+    assert payload["milestones"]
+    assert payload["deliverables"]
+    assert payload["project_register_entries"]
+    assert payload["project_baselines"]
+    assert payload["pm_dependencies"]
     assert payload["saved_filter_views"]
     assert payload["templates"]

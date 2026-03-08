@@ -20,7 +20,12 @@ from crash_logging import (
     logs_dir,
     read_log_text,
 )
-from ui_layout import add_left_aligned_buttons, configure_box_layout
+from ui_layout import (
+    EmptyStateStack,
+    SectionPanel,
+    add_left_aligned_buttons,
+    configure_box_layout,
+)
 
 
 class LogViewerDialog(QDialog):
@@ -32,13 +37,13 @@ class LogViewerDialog(QDialog):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
 
-        intro = QLabel(
-            "This log includes unexpected exceptions and labeled "
-            "high-risk operations such as backups, imports, "
-            "workspace switches, repairs, and snapshot restores."
+        intro_panel = SectionPanel(
+            "Application log",
+            "This log includes unexpected exceptions and labeled high-risk "
+            "operations such as backups, imports, workspace switches, "
+            "repairs, and snapshot restores.",
         )
-        intro.setWordWrap(True)
-        root.addWidget(intro)
+        root.addWidget(intro_panel)
 
         top = QHBoxLayout()
         configure_box_layout(top, margins=(0, 0, 0, 0), spacing=8)
@@ -48,19 +53,19 @@ class LogViewerDialog(QDialog):
         self.file_combo.currentIndexChanged.connect(self._load_selected)
         self.file_combo.setToolTip("Choose which log file to view.")
         top.addWidget(self.file_combo, 1)
-        root.addLayout(top)
+        intro_panel.body_layout.addLayout(top)
 
         self.path_label = QLabel("")
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.path_label.setWordWrap(True)
-        root.addWidget(self.path_label)
+        intro_panel.body_layout.addWidget(self.path_label)
 
-        self.text = QPlainTextEdit()
-        self.text.setReadOnly(True)
-        self.text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.text.setToolTip("Application log contents.")
-        root.addWidget(self.text, 1)
+        content_panel = SectionPanel(
+            "Log contents",
+            "The selected log opens below, with file-level actions attached to "
+            "the viewer instead of detached at the dialog edge.",
+        )
+        root.addWidget(content_panel, 1)
 
         actions = QHBoxLayout()
         self.refresh_btn = QPushButton("Refresh")
@@ -73,8 +78,21 @@ class LogViewerDialog(QDialog):
             self.open_file_btn,
             self.open_folder_btn,
             self.close_btn,
+            trailing_stretch=False,
         )
-        root.addLayout(actions)
+        content_panel.body_layout.addLayout(actions)
+
+        self.text = QPlainTextEdit()
+        self.text.setReadOnly(True)
+        self.text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.text.setToolTip("Application log contents.")
+        self.text_stack = EmptyStateStack(
+            self.text,
+            "No log file selected.",
+            "Choose a log file from the drop-down to inspect application events.",
+        )
+        content_panel.body_layout.addWidget(self.text_stack, 1)
 
         self.refresh_btn.clicked.connect(self.refresh)
         self.open_file_btn.clicked.connect(self._open_selected_file)
@@ -114,13 +132,16 @@ class LogViewerDialog(QDialog):
         self.path_label.setText(raw)
         if not raw:
             self.text.setPlainText("No log file selected.")
+            self.text_stack.set_has_content(False)
             return
         path = Path(raw)
         if not path.exists():
             self.text.setPlainText("The selected log file does not exist yet.")
+            self.text_stack.set_has_content(False)
             return
         self.text.setPlainText(read_log_text(path))
         self.text.moveCursor(QTextCursor.MoveOperation.End)
+        self.text_stack.set_has_content(bool(self.text.toPlainText().strip()))
 
     def _open_selected_file(self):
         raw = self.selected_log_path()

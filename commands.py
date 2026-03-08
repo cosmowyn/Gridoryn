@@ -227,6 +227,62 @@ class TaskCollectionMutationCommand(QUndoCommand):
         self.model._restore_task_snapshots(self.before, reload=(self.refresh_mode == "reload"))
 
 
+class MilestoneMutationCommand(QUndoCommand):
+    def __init__(self, model, milestone_id: int, text: str, apply_fn):
+        super().__init__(text)
+        self.model = model
+        self.milestone_id = int(milestone_id)
+        self.apply_fn = apply_fn
+        self.before = deepcopy(model.capture_milestone_snapshot(self.milestone_id))
+        self.after = None
+
+    def redo(self):
+        if self.after is None:
+            self.apply_fn()
+            self.after = deepcopy(self.model.capture_milestone_snapshot(self.milestone_id))
+            if self.after == self.before:
+                self.setObsolete(True)
+                return
+        else:
+            self.model._restore_milestone_snapshot(self.after)
+        self.model.reload_all(reset_header_state=False)
+
+    def undo(self):
+        if self.before is None:
+            self.model.db.delete_milestone(int(self.milestone_id))
+        else:
+            self.model._restore_milestone_snapshot(self.before)
+        self.model.reload_all(reset_header_state=False)
+
+
+class DeliverableMutationCommand(QUndoCommand):
+    def __init__(self, model, deliverable_id: int, text: str, apply_fn):
+        super().__init__(text)
+        self.model = model
+        self.deliverable_id = int(deliverable_id)
+        self.apply_fn = apply_fn
+        self.before = deepcopy(model.capture_deliverable_snapshot(self.deliverable_id))
+        self.after = None
+
+    def redo(self):
+        if self.after is None:
+            self.apply_fn()
+            self.after = deepcopy(self.model.capture_deliverable_snapshot(self.deliverable_id))
+            if self.after == self.before:
+                self.setObsolete(True)
+                return
+        else:
+            self.model._restore_deliverable_snapshot(self.after)
+        self.model.reload_all(reset_header_state=False)
+
+    def undo(self):
+        if self.before is None:
+            self.model.db.delete_deliverable(int(self.deliverable_id))
+        else:
+            self.model._restore_deliverable_snapshot(self.before)
+        self.model.reload_all(reset_header_state=False)
+
+
 class CreateTasksFromPayloadCommand(QUndoCommand):
     def __init__(self, model, payload: dict, parent_id: int | None = None, text: str = "Create tasks"):
         super().__init__(text)

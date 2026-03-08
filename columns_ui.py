@@ -6,6 +6,8 @@ from PySide6.QtWidgets import (
 
 from ui_layout import (
     DEFAULT_DIALOG_MARGINS,
+    EmptyStateStack,
+    SectionPanel,
     add_form_row,
     add_left_aligned_buttons,
     configure_box_layout,
@@ -23,9 +25,21 @@ class AddColumnDialog(QDialog):
         v = QVBoxLayout(self)
         configure_box_layout(v, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
 
+        section = SectionPanel(
+            "Custom column definition",
+            "Add a reusable custom field to tasks in this workspace.",
+        )
+        v.addWidget(section, 1)
+
+        intro = QLabel(
+            "Choose the field name and type. List columns can define starting values."
+        )
+        intro.setWordWrap(True)
+        section.body_layout.addWidget(intro)
+
         form = QFormLayout()
         configure_form_layout(form, label_width=100)
-        v.addLayout(form)
+        section.body_layout.addLayout(form)
 
         self.name = QLineEdit()
         add_form_row(form, "Name", self.name)
@@ -48,7 +62,7 @@ class AddColumnDialog(QDialog):
         ok.clicked.connect(self.accept)
         cancel.clicked.connect(self.reject)
         add_left_aligned_buttons(btns, ok, cancel)
-        v.addLayout(btns)
+        section.body_layout.addLayout(btns)
 
     def _update_type_ui(self, col_type: str):
         is_list = str(col_type) == "list"
@@ -78,7 +92,12 @@ class RemoveColumnDialog(QDialog):
 
         v = QVBoxLayout(self)
         configure_box_layout(v, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
-        v.addWidget(QLabel("Select a column to remove:"))
+
+        section = SectionPanel(
+            "Available custom columns",
+            "Removing a custom column also removes its stored values.",
+        )
+        v.addWidget(section, 1)
 
         self.list = QListWidget()
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -87,15 +106,22 @@ class RemoveColumnDialog(QDialog):
             item = QListWidgetItem(f"{c['name']}  ({c['col_type']})")
             item.setData(32, int(c["id"]))
             self.list.addItem(item)
-        v.addWidget(self.list)
+        self.list_stack = EmptyStateStack(
+            self.list,
+            "No custom columns",
+            "There are no custom columns to remove right now.",
+        )
+        self.list_stack.set_has_content(bool(columns))
+        section.body_layout.addWidget(self.list_stack, 1)
 
         btns = QHBoxLayout()
-        ok = QPushButton("Remove")
+        self.ok = QPushButton("Remove")
         cancel = QPushButton("Cancel")
-        ok.clicked.connect(self.accept)
+        self.ok.clicked.connect(self.accept)
         cancel.clicked.connect(self.reject)
-        add_left_aligned_buttons(btns, ok, cancel)
-        v.addLayout(btns)
+        self.ok.setEnabled(bool(columns))
+        add_left_aligned_buttons(btns, self.ok, cancel)
+        section.body_layout.addLayout(btns)
 
     def selected_column_id(self):
         it = self.list.currentItem()

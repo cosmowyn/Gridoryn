@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -9,11 +10,15 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 from ui_layout import (
     DEFAULT_DIALOG_MARGINS,
+    EmptyStateStack,
+    SectionPanel,
     add_form_row,
     add_left_aligned_buttons,
     configure_box_layout,
@@ -33,13 +38,26 @@ class TemplateVariablesDialog(QDialog):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
 
-        intro = QLabel("Fill template placeholder values.")
+        section = SectionPanel(
+            "Template values",
+            "Fill in placeholder values before inserting the template.",
+        )
+        root.addWidget(section, 1)
+
+        intro = QLabel(
+            "Provide values for the template placeholders. Date-related fields "
+            "default to today when left empty."
+        )
         intro.setWordWrap(True)
-        root.addWidget(intro)
+        section.body_layout.addWidget(intro)
+
+        form_container = QWidget()
+        form_container_layout = QVBoxLayout(form_container)
+        configure_box_layout(form_container_layout)
 
         form = QFormLayout()
         configure_form_layout(form, label_width=140)
-        root.addLayout(form)
+        form_container_layout.addLayout(form)
 
         for name in variables:
             e = QLineEdit()
@@ -49,11 +67,29 @@ class TemplateVariablesDialog(QDialog):
             add_form_row(form, f"{{{name}}}", e)
             self._edits[str(name)] = e
 
+        self.form_scroll = QScrollArea()
+        self.form_scroll.setWidgetResizable(True)
+        self.form_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.form_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.form_scroll.setWidget(form_container)
+
+        self.form_stack = EmptyStateStack(
+            self.form_scroll,
+            "No template variables",
+            "This template does not require any values. You can insert it directly.",
+        )
+        self.form_stack.set_has_content(bool(variables))
+        section.body_layout.addWidget(self.form_stack, 1)
+
         btns = QHBoxLayout()
         self.apply_btn = QPushButton("Insert template")
         self.cancel_btn = QPushButton("Cancel")
         add_left_aligned_buttons(btns, self.apply_btn, self.cancel_btn)
-        root.addLayout(btns)
+        section.body_layout.addLayout(btns)
 
         self.apply_btn.clicked.connect(self.accept)
         self.cancel_btn.clicked.connect(self.reject)

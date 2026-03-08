@@ -21,7 +21,12 @@ from PySide6.QtWidgets import (
 from auto_backup import backups_dir, delete_restore_point, list_restore_points
 from backup_io import import_payload_into_dbfile, read_backup_file
 from crash_logging import log_event, log_exception
-from ui_layout import add_left_aligned_buttons, configure_box_layout
+from ui_layout import (
+    EmptyStateStack,
+    SectionPanel,
+    add_left_aligned_buttons,
+    configure_box_layout,
+)
 from workspace_profiles import WorkspaceProfileManager
 
 
@@ -38,12 +43,13 @@ class SnapshotHistoryDialog(QDialog):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
 
-        intro = QLabel(
-            "Snapshots are read-only restore points. Restoring always creates a separate database copy or a new "
-            "workspace; the current database is never overwritten in place."
+        intro_panel = SectionPanel(
+            "Snapshot history",
+            "Snapshots are read-only restore points. Restoring always creates "
+            "a separate database copy or a new workspace; the current "
+            "database is never overwritten in place.",
         )
-        intro.setWordWrap(True)
-        root.addWidget(intro)
+        root.addWidget(intro_panel)
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(6)
@@ -52,14 +58,19 @@ class SnapshotHistoryDialog(QDialog):
         self.tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.tree.currentItemChanged.connect(self._update_details)
         self.tree.itemDoubleClicked.connect(lambda *_: self._restore_to_copy())
-        root.addWidget(self.tree, 1)
+        self.tree_stack = EmptyStateStack(
+            self.tree,
+            "No snapshots available.",
+            "Create a backup or wait for an autosnapshot to populate history.",
+        )
+        intro_panel.body_layout.addWidget(self.tree_stack, 1)
 
-        self.details = QPlainTextEdit()
-        self.details.setReadOnly(True)
-        self.details.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.details.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.details.setMinimumHeight(180)
-        root.addWidget(self.details, 1)
+        details_panel = SectionPanel(
+            "Snapshot details and actions",
+            "Selected snapshot metadata and restore actions stay attached to "
+            "the snapshot details area.",
+        )
+        root.addWidget(details_panel, 1)
 
         actions = QHBoxLayout()
         self.refresh_btn = QPushButton("Refresh")
@@ -76,8 +87,21 @@ class SnapshotHistoryDialog(QDialog):
             self.workspace_btn,
             self.delete_btn,
             self.close_btn,
+            trailing_stretch=False,
         )
-        root.addLayout(actions)
+        details_panel.body_layout.addLayout(actions)
+
+        self.details = QPlainTextEdit()
+        self.details.setReadOnly(True)
+        self.details.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.details.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.details.setMinimumHeight(180)
+        self.details_stack = EmptyStateStack(
+            self.details,
+            "No snapshot selected.",
+            "Select a snapshot to inspect its metadata and restore options.",
+        )
+        details_panel.body_layout.addWidget(self.details_stack, 1)
 
         self.refresh_btn.clicked.connect(self.refresh)
         self.open_folder_btn.clicked.connect(self._open_folder)
@@ -124,6 +148,7 @@ class SnapshotHistoryDialog(QDialog):
         if self.tree.currentItem() is None and self.tree.topLevelItemCount() > 0:
             self.tree.setCurrentItem(self.tree.topLevelItem(0))
         self._update_details(self.tree.currentItem(), None)
+        self.tree_stack.set_has_content(self.tree.topLevelItemCount() > 0)
 
     def _update_details(self, current, _previous):
         row = None
@@ -131,6 +156,7 @@ class SnapshotHistoryDialog(QDialog):
             row = current.data(0, Qt.ItemDataRole.UserRole)
         if not isinstance(row, dict):
             self.details.setPlainText("No snapshot selected.")
+            self.details_stack.set_has_content(False)
             return
         lines = [
             f"File: {str(row.get('path') or '')}",
@@ -145,6 +171,7 @@ class SnapshotHistoryDialog(QDialog):
             f"Size (bytes): {str(row.get('size_bytes') or 0)}",
         ]
         self.details.setPlainText("\n".join(lines))
+        self.details_stack.set_has_content(True)
 
     def _open_folder(self):
         path = backups_dir(getattr(self._db, "path", None))

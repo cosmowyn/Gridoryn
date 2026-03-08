@@ -284,6 +284,11 @@ class TaskFilterProxyModel(QSortFilterProxyModel):
             if bucket != str(self._parsed.bucket).strip().lower():
                 return False
 
+        if self._parsed.phase:
+            phase_name = str(task.get("phase_name") or "").strip().lower()
+            if phase_name != str(self._parsed.phase).strip().lower():
+                return False
+
         if self._parsed.due_none and due is not None:
             return False
 
@@ -379,12 +384,14 @@ class TaskFilterProxyModel(QSortFilterProxyModel):
         parts.append(str(task.get("description") or ""))
         parts.append(str(task.get("status") or ""))
         parts.append(str(task.get("due_date") or ""))
+        parts.append(str(task.get("start_date") or ""))
         parts.append(str(task.get("reminder_at") or ""))
         parts.append(str(task.get("priority") or ""))
         parts.append(str(task.get("last_update") or ""))
         parts.append(str(task.get("notes") or ""))
         parts.append(str(task.get("waiting_for") or ""))
         parts.append(str(task.get("planned_bucket") or ""))
+        parts.append(str(task.get("phase_name") or ""))
 
         # Custom values
         custom = task.get("custom") or {}

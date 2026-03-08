@@ -6,7 +6,23 @@ The format is inspired by Keep a Changelog and uses straightforward dated entrie
 
 ## [Unreleased]
 
-No unreleased entries yet.
+### Added
+
+- A production-oriented personal project management layer with project charters, phases, milestones, deliverables, structured risk/issue/assumption/decision registers, baselines, dependency validation, and a project cockpit dock
+- Lightweight timeline / Gantt-style planning data and workload summaries for local single-user project planning
+- Automated tests covering project-management schema migration, CRUD, validation, dashboard summaries, backup round-trips, search integration, and demo data
+- A dedicated project-health tree column so project health is visible directly in the main task list
+- PM-specific review categories for overdue milestones, deliverables due soon, and high-severity open risks
+
+### Changed
+
+- Demo/sample data now showcases project-management records and timeline-friendly task metadata
+- Embedded help and README were updated to document the project cockpit, phase search, milestones, deliverables, baselines, and workload planning
+- Project timeline bars can now be dragged horizontally to reschedule task, milestone, and deliverable dates from the cockpit
+- Milestone and deliverable timeline drags now participate in undo/redo, and project-cockpit dock defaults were tightened so action buttons stay visible sooner on smaller monitors
+- The main workspace layout was refactored so the project cockpit, details panel, relationship inspector, focus mode, analytics, and supporting docks use a more consistent section-based desktop layout with local action rows, bounded data regions, better default dock sizing, and contextual empty states
+- Settings, custom-column management, and template-variable dialogs now follow the same section-based layout doctrine so configuration and editor surfaces feel consistent with the main workspace
+- Active-task synchronization now keeps the relationship inspector, details panel, focus mode, project cockpit context, and status bar aligned to the same current task, and wheel-sensitive controls no longer change values accidentally while the user is scrolling through the UI
 
 ## [1.0.0] - 2026-03-08
 

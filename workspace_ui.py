@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -20,7 +19,14 @@ from PySide6.QtWidgets import (
 )
 
 from crash_logging import log_event, log_exception
-from ui_layout import add_form_row, add_left_aligned_buttons, configure_box_layout, configure_form_layout
+from ui_layout import (
+    EmptyStateStack,
+    SectionPanel,
+    add_form_row,
+    add_left_aligned_buttons,
+    configure_box_layout,
+    configure_form_layout,
+)
 from workspace_profiles import WorkspaceProfileManager
 
 
@@ -36,20 +42,30 @@ class WorkspaceManagerDialog(QDialog):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
 
-        intro = QLabel(
-            "Workspaces keep task databases explicit. Each workspace points to one SQLite file and restores its own "
-            "saved view/layout preferences when you switch."
+        intro_panel = SectionPanel(
+            "Workspace profiles",
+            "Workspaces keep local databases explicit. Each workspace points "
+            "to one SQLite file and restores its own saved view/layout "
+            "preferences when you switch.",
         )
-        intro.setWordWrap(True)
-        root.addWidget(intro)
+        root.addWidget(intro_panel)
 
         self.list = QListWidget()
         self.list.currentItemChanged.connect(self._update_details)
         self.list.itemDoubleClicked.connect(lambda *_: self._switch_selected())
-        root.addWidget(self.list, 1)
+        self.list_stack = EmptyStateStack(
+            self.list,
+            "No workspaces available.",
+            "Create a workspace or register an existing database to begin.",
+        )
+        intro_panel.body_layout.addWidget(self.list_stack, 1)
 
-        details_group = QGroupBox("Workspace details")
-        details_form = QFormLayout(details_group)
+        details_panel = SectionPanel(
+            "Workspace details",
+            "Selection details stay attached to the workspace list instead of "
+            "appearing as a detached form below it.",
+        )
+        details_form = QFormLayout()
         configure_form_layout(details_form, label_width=170)
         self.lbl_name = QLabel("-")
         self.lbl_path = QLabel("-")
@@ -62,7 +78,15 @@ class WorkspaceManagerDialog(QDialog):
         add_form_row(details_form, "Database path", self.lbl_path)
         add_form_row(details_form, "Created", self.lbl_created)
         add_form_row(details_form, "Last opened", self.lbl_opened)
-        root.addWidget(details_group)
+        details_panel.body_layout.addLayout(details_form)
+        root.addWidget(details_panel)
+
+        actions_panel = SectionPanel(
+            "Workspace actions",
+            "Create, register, remove, reveal, or switch without leaving the "
+            "workspace manager.",
+        )
+        root.addWidget(actions_panel)
 
         actions = QHBoxLayout()
         self.create_btn = QPushButton("Create workspace")
@@ -80,7 +104,7 @@ class WorkspaceManagerDialog(QDialog):
             self.reveal_btn,
             self.close_btn,
         )
-        root.addLayout(actions)
+        actions_panel.body_layout.addLayout(actions)
 
         self.create_btn.clicked.connect(self._create_workspace)
         self.add_existing_btn.clicked.connect(self._add_existing_database)
@@ -105,6 +129,7 @@ class WorkspaceManagerDialog(QDialog):
         if self.list.currentRow() < 0 and self.list.count() > 0:
             self.list.setCurrentRow(0)
         self._update_details(self.list.currentItem(), None)
+        self.list_stack.set_has_content(self.list.count() > 0)
 
     def selected_workspace_id(self) -> str | None:
         item = self.list.currentItem()

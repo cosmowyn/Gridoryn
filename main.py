@@ -46,7 +46,7 @@ from calendar_widgets import TaskCalendarWidget
 from reminders_ui import ReminderBatchDialog
 from archive_ui import ArchiveBrowserDialog
 from command_palette import CommandPaletteDialog, PaletteCommand
-from review_ui import ReviewWorkflowPanel
+from review_ui import PM_REVIEW_CATEGORIES, ReviewWorkflowPanel
 from focus_ui import FocusPanel
 from welcome_ui import WelcomeDialog
 from demo_data import create_demo_workspace, populate_demo_database
@@ -58,6 +58,7 @@ from log_viewer_ui import LogViewerDialog
 from quick_capture_ui import QuickCaptureDialog
 from relationships_ui import RelationshipsPanel
 from snapshot_history_ui import SnapshotHistoryDialog
+from project_cockpit_ui import ProjectCockpitPanel
 from platform_utils import shortcut_display_text, shortcut_sequence
 from workspace_profiles import WorkspaceProfileManager
 from workspace_ui import WorkspaceManagerDialog
@@ -69,10 +70,16 @@ from workflow_assist import (
     review_ack_state_to_setting,
     should_show_onboarding,
 )
+from interaction_utils import WheelFocusGuard
 
 from backup_io import export_backup_ui, import_backup_ui
 from theme_io import export_themes_ui, import_themes_ui
-from ui_layout import configure_box_layout, configure_grid_layout
+from ui_layout import (
+    EmptyStateStack,
+    SectionPanel,
+    configure_box_layout,
+    configure_grid_layout,
+)
 
 
 class FloatingTaskTableWindow(QMainWindow):
@@ -135,13 +142,17 @@ class MainWindow(QMainWindow):
         self._log_viewer_dialog: LogViewerDialog | None = None
         self._tray_icon: QSystemTrayIcon | None = None
         self._global_capture_hotkey = None
+        self._active_task_id: int | None = None
+        self._active_task_details: dict | None = None
         self._reminder_mode = str(
             self.model.settings.value("ui/reminder_mode", self.REMINDER_MODE_NORMAL)
         ).strip() or self.REMINDER_MODE_NORMAL
         self._reminder_prompt_cooldown_until: datetime | None = None
         self._reminder_dialog_open = False
         app = QApplication.instance()
+        self._wheel_focus_guard = WheelFocusGuard(self)
         if app is not None:
+            app.installEventFilter(self._wheel_focus_guard)
             app.installEventFilter(self)
 
         # Apply theme early so palette + fonts are correct
@@ -265,10 +276,19 @@ class MainWindow(QMainWindow):
         clear_btn.clicked.connect(lambda: self.search.setText(""))
         clear_btn.setMinimumHeight(control_h)
 
-        # Layout
         controls_panel = QWidget()
         controls_panel.setObjectName("CaptureNavigationPanel")
-        top_layout = QGridLayout(controls_panel)
+        controls_layout = QVBoxLayout(controls_panel)
+        configure_box_layout(controls_layout, spacing=10)
+
+        capture_section = SectionPanel(
+            "Quick add and search",
+            "Capture new work, search the current dataset, and switch the "
+            "active perspective without leaving the dock.",
+        )
+        controls_layout.addWidget(capture_section)
+
+        top_layout = QGridLayout()
         configure_grid_layout(top_layout)
         quick_lbl = QLabel("Quick add")
         search_lbl = QLabel("Search")
@@ -287,14 +307,18 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(search_lbl, 1, 0)
         top_layout.addWidget(self.search, 1, 1, 1, 4)
         top_layout.addWidget(clear_btn, 1, 5)
-        perspective_lbl = QLabel("Perspectives")
-        perspective_lbl.setMinimumWidth(80)
-        perspective_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        top_layout.addWidget(perspective_lbl, 2, 0)
-        top_layout.addWidget(self.perspective_bar, 2, 1, 1, 5)
         top_layout.setColumnStretch(1, 1)
         top_layout.setColumnStretch(3, 0)
         top_layout.setColumnStretch(5, 0)
+        capture_section.body_layout.addLayout(top_layout)
+
+        navigation_section = SectionPanel(
+            "Perspectives",
+            "Keep major views visible as first-class navigation targets and "
+            "switch them without hunting through menus.",
+        )
+        controls_layout.addWidget(navigation_section)
+        navigation_section.body_layout.addWidget(self.perspective_bar)
         self.controls_panel = controls_panel
 
         controls_scroll = QScrollArea()
@@ -303,7 +327,7 @@ class MainWindow(QMainWindow):
         controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         controls_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         controls_scroll.setWidget(self.controls_panel)
-        controls_scroll.setMaximumHeight((control_h * 3) + 74)
+        controls_scroll.setMaximumHeight((control_h * 4) + 148)
         self.controls_scroll = controls_scroll
 
         self._row_gutter = QWidget()
@@ -362,6 +386,7 @@ class MainWindow(QMainWindow):
         # Advanced filter panel (dock)
         self._init_filter_dock()
         self._init_details_dock()
+        self._init_project_dock()
         self._init_relationships_dock()
         self._init_undo_history_dock()
         self._init_focus_dock()
@@ -385,21 +410,17 @@ class MainWindow(QMainWindow):
         self.model.modelReset.connect(self._refresh_review_panel)
         self.model.modelReset.connect(self._refresh_focus_panel)
         self.model.modelReset.connect(self._refresh_analytics_panel)
-        self.model.modelReset.connect(self._refresh_details_dock)
-        self.model.modelReset.connect(self._refresh_relationships_panel)
-        self.model.modelReset.connect(self._refresh_task_browser)
+        self.model.modelReset.connect(self._refresh_active_task_views)
+        self.proxy.modelReset.connect(self._refresh_active_task_views)
         self.model.dataChanged.connect(lambda *_: self._refresh_calendar_markers())
         self.model.dataChanged.connect(lambda *_: self._refresh_focus_panel())
-        self.model.dataChanged.connect(lambda *_: self._refresh_relationships_panel())
-        self.model.dataChanged.connect(lambda *_: self._refresh_task_browser())
+        self.model.dataChanged.connect(lambda *_: self._refresh_active_task_views())
         self.model.rowsInserted.connect(lambda *_: self._refresh_calendar_markers())
         self.model.rowsInserted.connect(lambda *_: self._refresh_focus_panel())
-        self.model.rowsInserted.connect(lambda *_: self._refresh_relationships_panel())
-        self.model.rowsInserted.connect(lambda *_: self._refresh_task_browser())
+        self.model.rowsInserted.connect(lambda *_: self._refresh_active_task_views())
         self.model.rowsRemoved.connect(lambda *_: self._refresh_calendar_markers())
         self.model.rowsRemoved.connect(lambda *_: self._refresh_focus_panel())
-        self.model.rowsRemoved.connect(lambda *_: self._refresh_relationships_panel())
-        self.model.rowsRemoved.connect(lambda *_: self._refresh_task_browser())
+        self.model.rowsRemoved.connect(lambda *_: self._refresh_active_task_views())
         self.undo_stack.indexChanged.connect(self._on_undo_stack_index_changed)
 
         # Timer to refresh due-date gradient + foreground contrast
@@ -431,8 +452,7 @@ class MainWindow(QMainWindow):
         self.addAction(focus_quick_add)
 
         QTimer.singleShot(0, self._update_row_action_buttons)
-        QTimer.singleShot(0, self._refresh_details_dock)
-        QTimer.singleShot(0, self._refresh_task_browser)
+        QTimer.singleShot(0, self._refresh_active_task_views)
         QTimer.singleShot(0, self._maybe_show_onboarding)
 
     # ---------- Splash (close again once UI shows) ----------
@@ -959,6 +979,37 @@ class MainWindow(QMainWindow):
             lambda vis: self._toggle_details_act.setChecked(bool(vis)) if hasattr(self, "_toggle_details_act") else None
         )
 
+    def _init_project_dock(self):
+        self.project_panel = ProjectCockpitPanel(self)
+        self.project_panel.projectSelected.connect(self._focus_task_by_id)
+        self.project_panel.saveProfileRequested.connect(self._project_panel_save_profile)
+        self.project_panel.saveBaselineRequested.connect(self._project_panel_save_baseline)
+        self.project_panel.addPhaseRequested.connect(self._project_panel_add_phase)
+        self.project_panel.renamePhaseRequested.connect(self._project_panel_rename_phase)
+        self.project_panel.deletePhaseRequested.connect(self._project_panel_delete_phase)
+        self.project_panel.addMilestoneRequested.connect(self._project_panel_add_milestone)
+        self.project_panel.editMilestoneRequested.connect(self._project_panel_edit_milestone)
+        self.project_panel.deleteMilestoneRequested.connect(self._project_panel_delete_milestone)
+        self.project_panel.addDeliverableRequested.connect(self._project_panel_add_deliverable)
+        self.project_panel.editDeliverableRequested.connect(self._project_panel_edit_deliverable)
+        self.project_panel.deleteDeliverableRequested.connect(self._project_panel_delete_deliverable)
+        self.project_panel.addRegisterEntryRequested.connect(self._project_panel_add_register_entry)
+        self.project_panel.editRegisterEntryRequested.connect(self._project_panel_edit_register_entry)
+        self.project_panel.deleteRegisterEntryRequested.connect(self._project_panel_delete_register_entry)
+        self.project_panel.focusTaskRequested.connect(self._focus_task_by_id)
+        self.project_panel.timelineRescheduleRequested.connect(self._project_panel_reschedule_timeline_item)
+
+        self.project_dock = QDockWidget("Project cockpit", self)
+        self.project_dock.setObjectName("ProjectCockpitDock")
+        self.project_dock.setWidget(self._wrap_dock_content_scrollable(self.project_panel, "ProjectCockpitDockScroll"))
+        self._configure_dock_widget(self.project_dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.project_dock)
+        self.project_dock.hide()
+        self.project_dock.visibilityChanged.connect(
+            lambda vis: self._toggle_project_act.setChecked(bool(vis)) if hasattr(self, "_toggle_project_act") else None
+        )
+        self.project_dock.visibilityChanged.connect(lambda vis: self._refresh_project_panel() if vis else None)
+
     def _init_relationships_dock(self):
         self.relationships_panel = RelationshipsPanel(self)
         self.relationships_panel.focusTaskRequested.connect(self._focus_task_by_id)
@@ -986,9 +1037,15 @@ class MainWindow(QMainWindow):
         self.undo_view.setObjectName("UndoHistoryView")
         self.undo_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.undo_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        undo_panel = SectionPanel(
+            "Undo history",
+            "Recent undo commands stay visible in order, so it is clear what "
+            "state changes are available to walk back.",
+        )
+        undo_panel.body_layout.addWidget(self.undo_view, 1)
         self.undo_dock = QDockWidget("Undo History", self)
         self.undo_dock.setObjectName("UndoHistoryDock")
-        self.undo_dock.setWidget(self.undo_view)
+        self.undo_dock.setWidget(self._wrap_dock_content_scrollable(undo_panel, "UndoHistoryDockScroll"))
         self._configure_dock_widget(self.undo_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.undo_dock)
         self.undo_dock.hide()
@@ -1058,28 +1115,37 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(wrap)
         configure_box_layout(v, margins=(6, 6, 6, 6), spacing=8)
 
-        calendar_group = QGroupBox("Calendar")
-        calendar_layout = QVBoxLayout(calendar_group)
-        configure_box_layout(calendar_layout)
+        calendar_section = SectionPanel(
+            "Calendar",
+            "Browse dated work at a glance and create a task directly from a "
+            "day by double-clicking it.",
+        )
         self.calendar = TaskCalendarWidget()
         self.calendar.setGridVisible(True)
         self.calendar.setVerticalHeaderFormat(self.calendar.VerticalHeaderFormat.ISOWeekNumbers)
         self.calendar.selectionChanged.connect(self._refresh_calendar_list)
         self.calendar.activated.connect(self._on_calendar_date_activated)
         self.calendar.currentPageChanged.connect(lambda *_: self._refresh_calendar_markers())
-        calendar_layout.addWidget(self.calendar)
-        v.addWidget(calendar_group)
+        calendar_section.body_layout.addWidget(self.calendar)
+        v.addWidget(calendar_section)
 
-        agenda_group = QGroupBox("Agenda")
-        agenda_layout = QVBoxLayout(agenda_group)
-        configure_box_layout(agenda_layout)
+        agenda_section = SectionPanel(
+            "Agenda",
+            "Tasks for the selected date stay grouped below the calendar "
+            "instead of floating in a separate generic box.",
+        )
         self.calendar_list = QListWidget()
         self.calendar_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.calendar_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.calendar_list.itemActivated.connect(self._on_calendar_task_activated)
         self.calendar_list.itemDoubleClicked.connect(self._on_calendar_task_activated)
-        agenda_layout.addWidget(self.calendar_list, 1)
-        v.addWidget(agenda_group, 1)
+        self.calendar_list_stack = EmptyStateStack(
+            self.calendar_list,
+            "No tasks on the selected date.",
+            "Select a different day or double-click the calendar to add one.",
+        )
+        agenda_section.body_layout.addWidget(self.calendar_list_stack, 1)
+        v.addWidget(agenda_section, 1)
 
         self.calendar_dock = QDockWidget("Calendar / Agenda", self)
         self.calendar_dock.setObjectName("CalendarDock")
@@ -1094,14 +1160,14 @@ class MainWindow(QMainWindow):
     def _wrap_dock_content_scrollable(self, content: QWidget, object_name: str) -> QScrollArea:
         layout = content.layout()
         if layout is not None:
-            layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+            layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         try:
             min_width = max(content.minimumSizeHint().width(), content.sizeHint().width())
         except Exception:
             min_width = content.minimumWidth()
         if int(min_width or 0) > 0:
             content.setMinimumWidth(int(min_width))
-        content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
         scroll = QScrollArea()
         scroll.setObjectName(object_name)
@@ -1395,24 +1461,214 @@ class MainWindow(QMainWindow):
         visible = self._is_task_table_visible()
         self._set_tree_visible(not visible)
 
-    def _refresh_details_dock(self):
+    def _selected_task_details(self) -> dict | None:
         tid = self._selected_task_id()
         if tid is None:
-            self.details_panel.set_task_details(None)
-        else:
-            details = self.model.task_details(int(tid))
-            self.details_panel.set_task_details(details)
-        self._refresh_task_browser()
+            return None
+        return self.model.task_details(int(tid))
 
-    def _refresh_relationships_panel(self):
+    def _active_task_status_text(self, details: dict | None) -> str:
+        if not details:
+            return "Active task: none"
+        desc = str(details.get("description") or "").strip() or "(untitled task)"
+        status = str(details.get("status") or "").strip() or "Unknown"
+        priority = str(details.get("priority") or "").strip() or "-"
+        return f"Active task: [P{priority}] {desc} | {status}"
+
+    def _update_active_task_status_label(self, details: dict | None):
+        if not hasattr(self, "_active_task_label"):
+            return
+        text = self._active_task_status_text(details)
+        self._active_task_label.setText(text)
+        self._active_task_label.setToolTip(text)
+        self._active_task_label.setStatusTip(text)
+
+    def _refresh_relationships_panel_from_details(self, details: dict | None):
         if not hasattr(self, "relationships_panel"):
             return
-        tid = self._selected_task_id()
-        if tid is None:
+        if not details or details.get("id") is None:
             self.relationships_panel.set_relationships(None)
             return
-        data = self.model.task_relationships(int(tid), limit=10)
+        data = self.model.task_relationships(int(details["id"]), limit=10)
         self.relationships_panel.set_relationships(data)
+
+    def _refresh_project_panel_from_details(self, details: dict | None):
+        if not hasattr(self, "project_panel"):
+            return
+        current_project_id = (
+            int(details["project_id"])
+            if details and details.get("project_id") is not None
+            else None
+        )
+        self.project_panel.set_project_choices(
+            self.model.list_project_candidates(),
+            current_project_id,
+        )
+        if current_project_id is None:
+            self.project_panel.set_dashboard(None)
+            return
+        try:
+            dashboard = self.model.fetch_project_dashboard(int(current_project_id))
+        except Exception as e:
+            QMessageBox.warning(self, "Project cockpit refresh failed", str(e))
+            return
+        self.project_panel.set_dashboard(dashboard)
+
+    def _refresh_active_task_views(self):
+        details = self._selected_task_details()
+        self._active_task_details = details
+        self._active_task_id = (
+            int(details["id"])
+            if details and details.get("id") is not None
+            else None
+        )
+        self._update_active_task_status_label(details)
+        if hasattr(self, "details_panel"):
+            self.details_panel.set_task_details(details)
+        self._refresh_project_panel_from_details(details)
+        self._refresh_relationships_panel_from_details(details)
+        if hasattr(self, "focus_panel"):
+            self.focus_panel.set_current_summary(
+                self._focus_current_summary(details),
+                self._active_task_id,
+            )
+        self._refresh_task_browser()
+
+    def _refresh_details_dock(self):
+        self._refresh_active_task_views()
+
+    def _refresh_relationships_panel(self):
+        self._refresh_relationships_panel_from_details(self._selected_task_details())
+
+    def _current_project_id(self) -> int | None:
+        tid = self._selected_task_id()
+        if tid is None:
+            return None
+        return self.model.project_id_for_task(int(tid))
+
+    def _refresh_project_panel(self):
+        self._refresh_project_panel_from_details(self._selected_task_details())
+
+    def _project_panel_save_profile(self, project_task_id: int, payload: dict):
+        try:
+            self.model.save_project_profile(int(project_task_id), payload)
+        except Exception as e:
+            QMessageBox.warning(self, "Project save failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_save_baseline(self, project_task_id: int, target_date: str | None, effort_minutes: int | None):
+        try:
+            self.model.save_project_baseline(int(project_task_id), target_date, effort_minutes)
+        except Exception as e:
+            QMessageBox.warning(self, "Baseline save failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_add_phase(self, project_task_id: int, name: str):
+        try:
+            self.model.add_project_phase(int(project_task_id), str(name))
+        except Exception as e:
+            QMessageBox.warning(self, "Add phase failed", str(e))
+            return
+        self._refresh_project_panel()
+        self._refresh_details_dock()
+
+    def _project_panel_rename_phase(self, phase_id: int, name: str):
+        try:
+            self.model.update_project_phase(int(phase_id), str(name))
+        except Exception as e:
+            QMessageBox.warning(self, "Rename phase failed", str(e))
+            return
+        self._refresh_project_panel()
+        self._refresh_details_dock()
+
+    def _project_panel_delete_phase(self, phase_id: int):
+        try:
+            self.model.delete_project_phase(int(phase_id))
+        except Exception as e:
+            QMessageBox.warning(self, "Remove phase failed", str(e))
+            return
+        self._refresh_project_panel()
+        self._refresh_details_dock()
+
+    def _project_panel_add_milestone(self, payload: dict):
+        try:
+            self.model.upsert_milestone(dict(payload))
+        except Exception as e:
+            QMessageBox.warning(self, "Milestone save failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_edit_milestone(self, milestone_id: int, payload: dict):
+        data = dict(payload)
+        data["id"] = int(milestone_id)
+        try:
+            self.model.upsert_milestone(data)
+        except Exception as e:
+            QMessageBox.warning(self, "Milestone update failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_delete_milestone(self, milestone_id: int):
+        try:
+            self.model.delete_milestone(int(milestone_id))
+        except Exception as e:
+            QMessageBox.warning(self, "Milestone delete failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_add_deliverable(self, payload: dict):
+        try:
+            self.model.upsert_deliverable(dict(payload))
+        except Exception as e:
+            QMessageBox.warning(self, "Deliverable save failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_edit_deliverable(self, deliverable_id: int, payload: dict):
+        data = dict(payload)
+        data["id"] = int(deliverable_id)
+        try:
+            self.model.upsert_deliverable(data)
+        except Exception as e:
+            QMessageBox.warning(self, "Deliverable update failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_delete_deliverable(self, deliverable_id: int):
+        try:
+            self.model.delete_deliverable(int(deliverable_id))
+        except Exception as e:
+            QMessageBox.warning(self, "Deliverable delete failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_add_register_entry(self, payload: dict):
+        try:
+            self.model.upsert_project_register_entry(dict(payload))
+        except Exception as e:
+            QMessageBox.warning(self, "Register entry save failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_edit_register_entry(self, entry_id: int, payload: dict):
+        data = dict(payload)
+        data["id"] = int(entry_id)
+        try:
+            self.model.upsert_project_register_entry(data)
+        except Exception as e:
+            QMessageBox.warning(self, "Register entry update failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_delete_register_entry(self, entry_id: int):
+        try:
+            self.model.delete_project_register_entry(int(entry_id))
+        except Exception as e:
+            QMessageBox.warning(self, "Register entry delete failed", str(e))
+            return
+        self._refresh_project_panel()
 
     def _save_details_from_panel(self):
         tid = self.details_panel.task_id()
@@ -1424,6 +1680,8 @@ class MainWindow(QMainWindow):
             self.model.set_task_notes(int(tid), payload["notes"])
             self.model.set_task_tags(int(tid), payload["tags"])
             self.model.set_task_bucket(int(tid), payload["bucket"])
+            self.model.set_task_start_date(int(tid), payload.get("start_date"))
+            self.model.set_task_phase(int(tid), payload.get("phase_id"))
             self.model.set_task_waiting_for(int(tid), payload["waiting_for"])
             self.model.set_task_dependencies(int(tid), payload["dependencies"])
             self.model.set_task_recurrence(
@@ -1574,6 +1832,8 @@ class MainWindow(QMainWindow):
             it = QListWidgetItem(txt)
             it.setData(Qt.ItemDataRole.UserRole, int(task["id"]))
             self.calendar_list.addItem(it)
+        if hasattr(self, "calendar_list_stack"):
+            self.calendar_list_stack.set_has_content(self.calendar_list.count() > 0)
 
     def _on_calendar_task_activated(self, item):
         if not item:
@@ -1669,11 +1929,11 @@ class MainWindow(QMainWindow):
         filtered, hidden_counts = filter_acknowledged_review_data(data, self._review_ack_state())
         self.review_panel.set_review_data(filtered, hidden_counts=hidden_counts)
 
-    def _review_ack_state(self) -> dict[str, set[int]]:
+    def _review_ack_state(self) -> dict[str, set[str]]:
         raw = self.model.settings.value("review/acknowledged", "")
         return review_ack_state_from_setting(raw)
 
-    def _save_review_ack_state(self, state: dict[str, set[int]]):
+    def _save_review_ack_state(self, state: dict[str, set[str]]):
         self.model.settings.setValue("review/acknowledged", review_ack_state_to_setting(state))
 
     def _review_focus_task(self, task_id: int):
@@ -1718,14 +1978,14 @@ class MainWindow(QMainWindow):
         self._restore_from_archive_ids(ids)
         self._refresh_review_panel()
 
-    def _review_acknowledge(self, category: str, task_ids: list[int]):
-        ids = [int(x) for x in (task_ids or []) if int(x) > 0]
-        if not ids:
+    def _review_acknowledge(self, category: str, review_keys: list[str]):
+        keys = [str(item or "").strip() for item in (review_keys or []) if str(item or "").strip()]
+        if not keys:
             return
-        state = acknowledge_review_items(self._review_ack_state(), category, ids)
+        state = acknowledge_review_items(self._review_ack_state(), category, keys)
         self._save_review_ack_state(state)
         self._refresh_review_panel()
-        self.statusBar().showMessage(f"Marked {len(ids)} review item(s) as handled.", 2500)
+        self.statusBar().showMessage(f"Marked {len(keys)} review item(s) as handled.", 2500)
 
     def _review_clear_acknowledged(self, category: str):
         state = clear_review_acknowledgements(self._review_ack_state(), category=category)
@@ -1736,6 +1996,18 @@ class MainWindow(QMainWindow):
     def _review_use_category(self, category: str):
         key = str(category or "").strip()
         if not key:
+            return
+        if key in PM_REVIEW_CATEGORIES:
+            focus_ids = self.review_panel.selected_task_ids()
+            if focus_ids:
+                self._focus_task_by_id(int(focus_ids[0]))
+            self.project_dock.show()
+            self._toggle_project_act.setChecked(True)
+            self._refresh_project_panel()
+            self.statusBar().showMessage(
+                "Opened the project cockpit for the selected PM review item.",
+                3000,
+            )
             return
         state = self._capture_filter_state()
         state["search_text"] = ""
@@ -1775,11 +2047,11 @@ class MainWindow(QMainWindow):
         self._apply_filter_state(state)
         self.statusBar().showMessage("Applied best-effort main view for the current review category.", 3000)
 
-    def _focus_current_summary(self) -> str:
-        tid = self._selected_task_id()
-        if tid is None:
+    def _focus_current_summary(self, details: dict | None = None) -> str:
+        if details is None:
+            details = self._selected_task_details()
+        if not details:
             return "Current selection: none"
-        details = self.model.task_details(int(tid)) or {}
         desc = str(details.get("description") or "").strip() or "(untitled task)"
         status = str(details.get("status") or "")
         priority = str(details.get("priority") or "")
@@ -1802,7 +2074,11 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Focus refresh failed", str(e))
             return
-        self.focus_panel.set_focus_data(rows, self._focus_current_summary())
+        self.focus_panel.set_focus_data(
+            rows,
+            self._focus_current_summary(self._active_task_details),
+            self._active_task_id,
+        )
 
     def _focus_panel_focus_task(self, task_id: int):
         tid = int(task_id)
@@ -2075,6 +2351,7 @@ class MainWindow(QMainWindow):
             s.setValue("ui/tree_float_geometry", self._floating_table_window.saveGeometry())
         s.setValue("ui/filters_dock_visible", self.filter_dock.isVisible())
         s.setValue("ui/details_dock_visible", self.details_dock.isVisible())
+        s.setValue("ui/project_dock_visible", self.project_dock.isVisible())
         s.setValue("ui/relationships_dock_visible", self.relationships_dock.isVisible())
         s.setValue("ui/undo_dock_visible", self.undo_dock.isVisible())
         s.setValue("ui/focus_dock_visible", self.focus_dock.isVisible())
@@ -2312,6 +2589,13 @@ class MainWindow(QMainWindow):
             PaletteCommand("task.archive", "Archive task", "Archive selected task(s)", ("delete", "hide"), self._archive_selected),
             PaletteCommand("task.delete", "Delete permanently", "Permanently delete selected task(s)", ("remove", "hard delete"), self._delete_selected_permanently),
             PaletteCommand("ui.open_details", "Open details panel", "Show and focus details panel", ("notes", "details"), self._show_details_and_focus),
+            PaletteCommand(
+                "ui.open_project_cockpit",
+                "Open project cockpit",
+                "Show project charter, milestones, deliverables, timeline, and workload for the current project",
+                ("project", "milestone", "deliverable", "timeline", "gantt"),
+                lambda: (self.project_dock.show(), self._toggle_project_act.setChecked(True), self._refresh_project_panel()),
+            ),
             PaletteCommand(
                 "ui.open_capture_navigation",
                 "Open capture/navigation panel",
@@ -2698,6 +2982,11 @@ class MainWindow(QMainWindow):
         self._version_label.setToolTip(f"{APP_NAME} {app_display_version()}")
         self._version_label.setStatusTip("Application version.")
         self.statusBar().addPermanentWidget(self._version_label)
+        self._active_task_label = QLabel("Active task: none", self)
+        self._active_task_label.setObjectName("ActiveTaskStatusLabel")
+        self._active_task_label.setToolTip("Current active task selection.")
+        self._active_task_label.setStatusTip("Current active task selection.")
+        self.statusBar().addPermanentWidget(self._active_task_label)
         self._workspace_label = QLabel(f"Workspace: {self.workspace_name}", self)
         self._workspace_label.setObjectName("WorkspaceStatusLabel")
         self._workspace_label.setToolTip(self.workspace_db_path)
@@ -2969,6 +3258,12 @@ class MainWindow(QMainWindow):
         toggle_details_act.setChecked(True)
         toggle_details_act.triggered.connect(lambda checked: self.details_dock.setVisible(bool(checked)))
 
+        toggle_project_act = QAction("Project cockpit", self)
+        toggle_project_act.setCheckable(True)
+        toggle_project_act.setChecked(False)
+        toggle_project_act.setShortcut(shortcut_sequence("Ctrl+Shift+J"))
+        toggle_project_act.triggered.connect(lambda checked: self.project_dock.setVisible(bool(checked)))
+
         toggle_relationships_act = QAction("Relationship inspector", self)
         toggle_relationships_act.setCheckable(True)
         toggle_relationships_act.setChecked(False)
@@ -3182,6 +3477,7 @@ class MainWindow(QMainWindow):
         m_view.addAction(float_table_act)
         m_view.addAction(toggle_filters_act)
         m_view.addAction(toggle_details_act)
+        m_view.addAction(toggle_project_act)
         m_view.addAction(toggle_relationships_act)
         m_view.addAction(toggle_undo_history_act)
         m_view.addAction(toggle_focus_act)
@@ -3228,6 +3524,7 @@ class MainWindow(QMainWindow):
         m_tools.addSeparator()
         m_tools.addAction(toggle_relationships_act)
         m_tools.addAction(toggle_focus_act)
+        m_tools.addAction(toggle_project_act)
         m_tools.addAction(onboarding_act)
         m_tools.addSeparator()
         m_tools.addAction(diagnostics_act)
@@ -3265,6 +3562,7 @@ class MainWindow(QMainWindow):
         tb.addAction(add_child_act)
         tb.addAction(archive_act)
         tb.addAction(duplicate_act)
+        tb.addAction(toggle_project_act)
         tb.addAction(toggle_relationships_act)
         tb.addAction(toggle_focus_act)
         tb.addSeparator()
@@ -3276,6 +3574,7 @@ class MainWindow(QMainWindow):
         self._toggle_table_act = toggle_table_act
         self._float_table_act = float_table_act
         self._toggle_details_act = toggle_details_act
+        self._toggle_project_act = toggle_project_act
         self._toggle_relationships_act = toggle_relationships_act
         self._toggle_undo_history_act = toggle_undo_history_act
         self._toggle_focus_act = toggle_focus_act
@@ -3310,6 +3609,7 @@ class MainWindow(QMainWindow):
         self.addAction(move_up_act)
         self.addAction(move_down_act)
         self.addAction(command_palette_act)
+        self.addAction(toggle_project_act)
         self.addAction(toggle_focus_act)
         self.addAction(toggle_relationships_act)
         self.addAction(onboarding_act)
@@ -3342,6 +3642,7 @@ class MainWindow(QMainWindow):
             (float_table_act, "Detach the task table into its own window so it can live on another monitor."),
             (toggle_filters_act, "Show or hide the Filters dock."),
             (toggle_details_act, "Show or hide the Details dock."),
+            (toggle_project_act, "Show or hide the project cockpit for charter, milestones, deliverables, timeline, and workload."),
             (toggle_relationships_act, "Show or hide the relationship inspector for dependencies, related tasks, and project context."),
             (toggle_undo_history_act, "Show or hide the Undo History dock."),
             (toggle_focus_act, "Show or hide the Focus mode dock for current actionable work."),
@@ -3664,7 +3965,75 @@ class MainWindow(QMainWindow):
 
     def _on_current_changed(self, *_):
         self._update_row_action_buttons()
+        self._refresh_active_task_views()
+
+    @staticmethod
+    def _shift_iso_date(value: str | None, delta_days: int) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            return (
+                datetime.strptime(raw[:10], "%Y-%m-%d").date()
+                + timedelta(days=int(delta_days))
+            ).isoformat()
+        except Exception:
+            return raw or None
+
+    def _project_panel_reschedule_timeline_item(self, kind: str, item_id: int, delta_days: int):
+        item_kind = str(kind or "").strip().lower()
+        days = int(delta_days or 0)
+        if days == 0:
+            return
+        try:
+            if item_kind == "task":
+                task = self.model.db.fetch_task_by_id(int(item_id))
+                if not task:
+                    return
+                self.model.undo_stack.beginMacro("Reschedule task from timeline")
+                try:
+                    if str(task.get("start_date") or "").strip():
+                        self.model.set_task_start_date(
+                            int(item_id),
+                            self._shift_iso_date(task.get("start_date"), days),
+                        )
+                    if str(task.get("due_date") or "").strip():
+                        self.model.set_task_due_date(
+                            int(item_id),
+                            self._shift_iso_date(task.get("due_date"), days),
+                        )
+                finally:
+                    self.model.undo_stack.endMacro()
+            elif item_kind == "milestone":
+                milestone = self.model.fetch_milestone_by_id(int(item_id))
+                if not milestone:
+                    return
+                self.model.set_milestone_dates(
+                    int(item_id),
+                    self._shift_iso_date(milestone.get("start_date"), days)
+                    if str(milestone.get("start_date") or "").strip()
+                    else None,
+                    self._shift_iso_date(milestone.get("target_date"), days)
+                    if str(milestone.get("target_date") or "").strip()
+                    else None,
+                )
+            elif item_kind == "deliverable":
+                deliverable = self.model.fetch_deliverable_by_id(int(item_id))
+                if not deliverable:
+                    return
+                self.model.set_deliverable_due_date(
+                    int(item_id),
+                    self._shift_iso_date(deliverable.get("due_date"), days),
+                )
+            else:
+                return
+        except Exception as e:
+            QMessageBox.warning(self, "Timeline reschedule failed", str(e))
+            return
+        self._refresh_project_panel()
         self._refresh_details_dock()
+        self._refresh_calendar_list()
+        self._refresh_review_panel()
         self._refresh_focus_panel()
         self._refresh_relationships_panel()
 
@@ -3724,16 +4093,65 @@ class MainWindow(QMainWindow):
                 return logical
         return None
 
-    def _focus_task_by_id(self, task_id: int):
+    def _default_unfiltered_state(self) -> dict:
+        return {
+            "search_text": "",
+            "filter_panel": {
+                "statuses": [],
+                "priority_min": 1,
+                "priority_max": 5,
+                "due_enabled": False,
+                "due_from": None,
+                "due_to": None,
+                "hide_done": False,
+                "overdue_only": False,
+                "blocked_only": False,
+                "waiting_only": False,
+                "show_children_of_matches": True,
+                "tags": [],
+            },
+            "perspective": "all",
+            "sort_mode": str(self.sort_mode.currentData() or "manual"),
+        }
+
+    def _proxy_index_for_task_id(
+        self,
+        task_id: int,
+        *,
+        reveal_if_needed: bool = False,
+    ) -> QModelIndex:
         src = self._source_index_for_task_id(int(task_id), 0)
         if not src.isValid():
-            return
+            return QModelIndex()
         pidx = self.proxy.mapFromSource(src)
+        if pidx.isValid() or not reveal_if_needed:
+            return pidx
+        self._apply_filter_state(self._default_unfiltered_state())
+        pidx = self.proxy.mapFromSource(src)
+        if pidx.isValid():
+            self.statusBar().showMessage(
+                "Adjusted the main view to reveal the selected task.",
+                3000,
+            )
+        return pidx
+
+    def _focus_task_by_id(self, task_id: int):
+        pidx = self._proxy_index_for_task_id(
+            int(task_id),
+            reveal_if_needed=True,
+        )
         if not pidx.isValid():
             return
+        already_current = (
+            self._selected_task_id() is not None
+            and int(self._selected_task_id()) == int(task_id)
+        )
         self._expand_proxy_ancestors(pidx)
         self.view.setCurrentIndex(pidx)
         self.view.scrollTo(pidx)
+        self.view.setFocus(Qt.FocusReason.OtherFocusReason)
+        if already_current:
+            self._refresh_active_task_views()
 
     def _edit_current_cell(self):
         if self.view.state() == QAbstractItemView.State.EditingState:
@@ -4024,6 +4442,7 @@ class MainWindow(QMainWindow):
             "priority": 80,
             "status": 120,
             "progress": 130,
+            "project_health": 120,
             "next_action": 260,
             "project_state": 140,
         }
@@ -4087,6 +4506,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_toggle_details_act"):
             self._toggle_details_act.setChecked(bool(details_visible))
 
+        project_visible = s.value("ui/project_dock_visible", False, type=bool)
+        self.project_dock.setVisible(bool(project_visible))
+        if hasattr(self, "_toggle_project_act"):
+            self._toggle_project_act.setChecked(bool(project_visible))
+
         relationships_visible = s.value("ui/relationships_dock_visible", False, type=bool)
         self.relationships_dock.setVisible(bool(relationships_visible))
         if hasattr(self, "_toggle_relationships_act"):
@@ -4123,7 +4547,7 @@ class MainWindow(QMainWindow):
         sort_mode = str(s.value("ui/sort_mode", "manual"))
         self._set_sort_mode_by_key(sort_mode)
 
-        reminder_mode = str(s.value("ui/reminder_mode", self._reminder_mode))
+        reminder_mode = str(s.value("ui/reminder_mode", self._reminder_mode))   
         self._set_reminder_mode(reminder_mode, show_message=False)
 
         self._apply_collapsed_state_to_view()

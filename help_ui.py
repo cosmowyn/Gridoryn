@@ -61,6 +61,11 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><strong>Quick Start</strong> offers first-run onboarding, sample data, and fast links into the guide and review workflow.</li>
             <li><strong>Calendar double-click entry</strong> lets you create a dated task directly from the calendar and jump straight into editing.</li>
             <li><strong>Relationship inspector</strong> surfaces dependencies, dependents, same-tag tasks, same-project context, and project health in one place.</li>
+            <li><strong>Active task selection stays synchronized</strong> across the main tree, details, relationship inspector, focus mode, project cockpit, and status bar so the current record is always clear.</li>
+            <li><strong>Project cockpit</strong> turns top-level work into a local-first project workspace with charters, phases, milestones, deliverables, baselines, workload, and structured risk/issue/assumption/decision registers.</li>
+            <li><strong>Major docks now share a consistent workspace layout</strong> with top-aligned sections, local action rows, bounded data regions, and contextual empty states instead of long stacks of detached controls.</li>
+            <li><strong>Mouse-wheel protection on editor controls</strong> prevents accidental changes while you are simply scrolling through docks and forms.</li>
+            <li><strong>Project health is also visible in the main tree</strong> through a dedicated Health column, so you can scan project status without opening the cockpit.</li>
             <li><strong>Workspace profiles</strong> keep multiple databases explicit and let each workspace restore its own layout and view state.</li>
             <li><strong>Snapshot history</strong> shows restore points with metadata and restores them safely into a new database copy or workspace.</li>
             <li><strong>Template, workspace, and snapshot removal</strong> always asks for explicit confirmation before anything is permanently deleted.</li>
@@ -212,6 +217,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><code>due:none</code></li>
             <li><code>tag:work</code></li>
             <li><code>bucket:inbox</code>, <code>bucket:today</code>, <code>bucket:upcoming</code>, <code>bucket:someday</code></li>
+            <li><code>phase:planning</code>, <code>phase:approval</code></li>
             <li><code>has:children</code>, <code>has:nochildren</code></li>
             <li><code>blocked:true</code> or <code>is:blocked</code></li>
             <li><code>waiting:true</code> or <code>is:waiting</code></li>
@@ -373,6 +379,9 @@ HELP_CHAPTERS: list[HelpChapter] = [
         <p><strong>Built-in review categories</strong>:</p>
         <ul>
             <li>Overdue</li>
+            <li>Overdue Milestones</li>
+            <li>Deliverables Due Soon</li>
+            <li>High-Severity Risks</li>
             <li>No Due Date</li>
             <li>Inbox Unprocessed</li>
             <li>Stalled Projects</li>
@@ -388,6 +397,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li>Adjust thresholds for waiting age, stalled threshold, and recent window.</li>
             <li>Double-click a row to focus it in the main tree.</li>
             <li>Use the action buttons to focus, use the category in the main tree, acknowledge handled items, mark done, archive, or restore directly from the review dock.</li>
+            <li>PM-specific categories such as milestones, deliverables, and risks still support focus and acknowledgement, but destructive task actions are disabled when they would be misleading.</li>
             <li>Acknowledged items are hidden from the current review category until you clear the handled state, which keeps repeat review sessions shorter and less noisy.</li>
         </ul>
         <p>This dock is intended for weekly review, daily cleanup, and restoring trust in the system when your task list gets noisy.</p>
@@ -402,6 +412,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
         <ul>
             <li>It surfaces <strong>overdue</strong> work, <strong>today</strong> work, and <strong>next actionable tasks</strong> from active projects.</li>
             <li>The top summary mirrors the current selection so you can keep context while scanning the focus shortlist.</li>
+            <li>The action row is attached directly to the focus list, so refresh, focus, detail access, and exit controls remain visible beside the data they affect.</li>
             <li>Enable <strong>Include blocked/waiting context</strong> when you want due-today dependencies or waiting items visible during planning.</li>
             <li>Double-click a focus item to jump back to it in the main tree.</li>
             <li>Use <strong>Open details</strong> when you need notes, reminders, dependencies, or attachments while staying in a focused session.</li>
@@ -427,6 +438,18 @@ HELP_CHAPTERS: list[HelpChapter] = [
         title="Projects and Next Actions",
         keywords=[
             "project",
+            "project cockpit",
+            "charter",
+            "milestone",
+            "deliverable",
+            "baseline",
+            "phase",
+            "risk",
+            "issue",
+            "assumption",
+            "decision",
+            "timeline",
+            "gantt",
             "next action",
             "blocked",
             "stalled",
@@ -434,15 +457,31 @@ HELP_CHAPTERS: list[HelpChapter] = [
             "parent",
         ],
         body_html="""
-        <p>Any task with active children behaves like a project or parent item.</p>
+        <p>The <strong>Project cockpit</strong> dock turns a selected top-level task into a structured personal project workspace without leaving the local task database.</p>
         <ul>
+            <li>The cockpit is laid out as a compact desktop workspace: <strong>project selection</strong> at the top, a persistent <strong>project summary header</strong> below it, then tab-local work surfaces underneath.</li>
+            <li>Each cockpit tab keeps <strong>actions attached to its own table or view</strong>, so milestone, deliverable, register, timeline, and workload actions do not get pushed to the bottom of the whole panel.</li>
+            <li>Empty tabs now show <strong>contextual empty states</strong> instead of leaving large blank areas.</li>
+            <li><strong>Project definition</strong> stores objective, scope, out-of-scope items, owner, stakeholders, target date, success criteria, summary/background, category, and health override.</li>
+            <li><strong>Phases</strong> provide a default project lifecycle and can be extended or renamed per project.</li>
+            <li><strong>Tasks can be assigned to phases</strong> from the details panel, which improves filtering and timeline clarity.</li>
+            <li><strong>Milestones</strong> are first-class records with title, description, target date, baseline date, completion state, linked task, phase, and dependency handling.</li>
+            <li><strong>Deliverables</strong> stay distinct from generic tasks and track due date, acceptance criteria, linked work, and version/reference text.</li>
+            <li><strong>Structured registers</strong> store risks, issues, assumptions, and decisions as separate records instead of free-form notes.</li>
+            <li><strong>Baseline tracking</strong> compares current target dates and effort against the saved baseline so slippage is visible.</li>
+            <li><strong>Timeline</strong> shows project, task, milestone, and deliverable rows over time in a lightweight Gantt-style view.</li>
+            <li><strong>Timeline bars for tasks, milestones, and deliverables can be dragged horizontally</strong> to reschedule dates directly from the project cockpit.</li>
+            <li><strong>Timeline rescheduling participates in undo/redo</strong>, including milestone and deliverable date moves.</li>
+            <li><strong>Workload</strong> summarizes planned effort by day and week to highlight overcommitment for a single local user.</li>
+            <li><strong>Health</strong> can be overridden manually, but the app also infers risk from overdue work, blockers, inactivity, and scope-related register entries.</li>
+            <li><strong>The main task tree now includes a compact Health column</strong> so project risk is visible even when the cockpit is closed.</li>
             <li>The app evaluates active children to find the <strong>next actionable child</strong>.</li>
             <li>A project can be marked as <strong>blocked</strong> when the remaining open children are waiting or dependency-blocked.</li>
             <li>A project can be marked as <strong>stalled</strong> when it has gone too long without useful forward movement.</li>
             <li>A project can be flagged as having <strong>no next action</strong> when it still has open work but nothing clearly actionable.</li>
             <li>Child completion rolls up to the parent progress column and summary metadata.</li>
         </ul>
-        <p>These signals are surfaced in the details summary and the review workflow, but they do not remove manual control over task structure or status.</p>
+        <p>These signals are surfaced in the details summary, the relationship inspector, the review workflow, and the project cockpit, but they do not remove manual control over task structure or status.</p>
         """,
     ),
     HelpChapter(
@@ -461,13 +500,15 @@ HELP_CHAPTERS: list[HelpChapter] = [
         body_html="""
         <p>The <strong>Relationship inspector</strong> dock adds context around the selected task without replacing the main tree.</p>
         <ul>
+            <li>Relationships are grouped into <strong>Dependencies</strong>, <strong>Structure</strong>, and <strong>Context</strong> tabs so the inspector stays readable on normal desktop sizes.</li>
+            <li>The inspector updates immediately when the active task changes in the main tree, details browser, focus mode, or project cockpit.</li>
             <li><strong>Depends on</strong> shows the tasks that currently block the selected task.</li>
             <li><strong>Blocking</strong> shows tasks that depend on the current task.</li>
             <li><strong>Children</strong>, <strong>Siblings</strong>, and <strong>Same project</strong> reveal nearby work inside the same project structure.</li>
             <li><strong>Same tags</strong> and <strong>Same waiting context</strong> help you cluster similar work or follow up on external dependencies.</li>
             <li>The summary area highlights project state, next action, stalled reason, and same-day workload pressure when relevant.</li>
         </ul>
-        <p>Double-click any related task in the inspector to focus it back in the main tree.</p>
+        <p>Double-click any related task in the inspector, or use the Focus button, to move the global selection back to that task in the main tree and refresh the rest of the UI around it.</p>
         """,
     ),
     HelpChapter(
@@ -653,6 +694,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
         body_html="""
         <p>The Analytics dock gives a lightweight summary of system health and execution trends.</p>
         <ul>
+            <li>The layout uses a <strong>compact summary strip plus split list panels</strong>, so metrics, trends, warnings, and hints stay visible without wasting large areas of dock space.</li>
             <li><strong>Completed today</strong> and <strong>completed this week</strong> summarize throughput.</li>
             <li><strong>Overdue open</strong>, <strong>open with no due date</strong>, and <strong>Inbox unprocessed</strong> highlight planning debt.</li>
             <li><strong>Active open / Archived</strong> helps estimate whether the system is being trimmed or allowed to bloat.</li>

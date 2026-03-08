@@ -12,9 +12,11 @@ from PySide6.QtGui import QColor, QUndoStack, QIcon
 from commands import (
     AddTaskCommand, DeleteSubtreeCommand, EditCellCommand, MoveNodeCommand,
     AddCustomColumnCommand, RemoveCustomColumnCommand,
-    TaskMutationCommand, TaskCollectionMutationCommand, CreateTasksFromPayloadCommand,
+    DeliverableMutationCommand, MilestoneMutationCommand, TaskMutationCommand,
+    TaskCollectionMutationCommand, CreateTasksFromPayloadCommand,
 )
 from project_intelligence import analyze_projects
+from project_management import PROJECT_HEALTH_LABELS
 from theme import ThemeManager
 
 
@@ -125,6 +127,7 @@ class TaskTreeModel(QAbstractItemModel):
             ("priority", "Priority", "int"),
             ("status", "Status", "status"),
             ("progress", "Progress", "progress"),
+            ("project_health", "Health", "text"),
             ("next_action", "Next action", "text"),
             ("project_state", "State", "text"),
         ]
@@ -134,6 +137,7 @@ class TaskTreeModel(QAbstractItemModel):
         self._id_map: dict[int, _Node] = {}
         self._last_added_task_id: int | None = None
         self._project_health_cache: dict[int, dict] = {}
+        self._project_management_health_cache: dict[int, dict] = {}
 
         self.reload_all(reset_header_state=False)
 
@@ -165,6 +169,7 @@ class TaskTreeModel(QAbstractItemModel):
             int(row["id"]): row
             for row in analyze_projects(rows, stalled_days=14, today=date.today())
         }
+        self._project_management_health_cache = self.db.fetch_project_health_overview()
         return rows
 
     def _rebuild_tree(self, tasks: list[dict]):
@@ -469,7 +474,13 @@ class TaskTreeModel(QAbstractItemModel):
             | Qt.ItemFlag.ItemIsDropEnabled
         )
         key = self.column_key(index.column())
-        if key not in {"last_update", "progress", "next_action", "project_state"}:
+        if key not in {
+            "last_update",
+            "progress",
+            "project_health",
+            "next_action",
+            "project_state",
+        }:
             base |= Qt.ItemFlag.ItemIsEditable
         return base
 
@@ -565,10 +576,17 @@ class TaskTreeModel(QAbstractItemModel):
             return value
 
         if role == Qt.ItemDataRole.BackgroundRole:
+            if self.column_key(col) == "project_health":
+                return self._project_health_background(node.task)
             return self._due_background(node.task)
 
         # NEW: readable text on dynamic due-date rows (only when bg is set)
         if role == Qt.ItemDataRole.ForegroundRole:
+            if self.column_key(col) == "project_health":
+                bg = self._project_health_background(node.task)
+                if isinstance(bg, QColor):
+                    return _best_contrast_text_color(bg)
+                return None
             bg = self._due_background(node.task)
             if isinstance(bg, QColor):
                 return _best_contrast_text_color(bg)
@@ -579,7 +597,13 @@ class TaskTreeModel(QAbstractItemModel):
     def setData(self, index: QModelIndex, value, role=Qt.ItemDataRole.EditRole):
         if role != Qt.ItemDataRole.EditRole or not index.isValid():
             return False
-        if self.column_key(index.column()) in {"last_update", "progress", "next_action", "project_state"}:
+        if self.column_key(index.column()) in {
+            "last_update",
+            "progress",
+            "project_health",
+            "next_action",
+            "project_state",
+        }:
             return False
 
         node = index.internalPointer()
@@ -649,6 +673,11 @@ class TaskTreeModel(QAbstractItemModel):
             return None
         return self._project_health_cache.get(int(task_id))
 
+    def _project_management_summary(self, task_id: int | None) -> dict | None:
+        if task_id is None:
+            return None
+        return self._project_management_health_cache.get(int(task_id))
+
     def _project_state_text(self, task: dict, node: _Node | None) -> str:
         summary = self._project_summary(int(task.get("id") or 0))
         if summary:
@@ -668,6 +697,35 @@ class TaskTreeModel(QAbstractItemModel):
         if node is not None and node.children:
             return "Project"
         return "Ready"
+
+    def _project_health_text(self, task: dict) -> str:
+        summary = self._project_management_summary(int(task.get("id") or 0))
+        if not summary:
+            return ""
+        health = str(summary.get("effective_health") or "").strip().lower()
+        compact = {
+            "awaiting_external_input": "Awaiting",
+            "scope_drifting": "Scope drift",
+        }
+        return compact.get(
+            health,
+            str(summary.get("effective_health_label") or PROJECT_HEALTH_LABELS.get(health, "")),
+        )
+
+    def _project_health_background(self, task: dict) -> QColor | None:
+        summary = self._project_management_summary(int(task.get("id") or 0))
+        if not summary:
+            return None
+        health = str(summary.get("effective_health") or "").strip().lower()
+        palette = {
+            "on_track": QColor("#16A34A"),
+            "at_risk": QColor("#F59E0B"),
+            "delayed": QColor("#DC2626"),
+            "blocked": QColor("#B91C1C"),
+            "awaiting_external_input": QColor("#D97706"),
+            "scope_drifting": QColor("#7C3AED"),
+        }
+        return palette.get(health)
 
     def _auto_mark_parent_done_chain(self, start_node: _Node | None) -> list[_Node]:
         changed_nodes: list[_Node] = []
@@ -689,6 +747,8 @@ class TaskTreeModel(QAbstractItemModel):
             key = self.core_cols[col][0]
             if key == "progress":
                 return self._progress_text(node)
+            if key == "project_health":
+                return self._project_health_text(task)
             if key == "next_action":
                 summary = self._project_summary(int(task.get("id") or 0))
                 return str(summary.get("next_action_badge") or "") if summary else ""
@@ -945,6 +1005,30 @@ class TaskTreeModel(QAbstractItemModel):
             )
         )
 
+    def set_task_start_date(self, task_id: int, start_date: str | None):
+        value = str(start_date or "").strip() or None
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Change start date",
+                lambda: self.db.update_task_field(tid, "start_date", value),
+            )
+        )
+
+    def set_task_due_date(self, task_id: int, due_date: str | None):
+        value = str(due_date or "").strip() or None
+        tid = int(task_id)
+        self.undo_stack.push(
+            TaskMutationCommand(
+                self,
+                tid,
+                "Change due date",
+                lambda: self.db.update_task_field(tid, "due_date", value),
+            )
+        )
+
     def set_task_waiting_for(self, task_id: int, waiting_for: str):
         text = str(waiting_for or "").strip()
         tid = int(task_id)
@@ -1096,6 +1180,149 @@ class TaskTreeModel(QAbstractItemModel):
 
     def fetch_analytics_summary(self, trend_days: int = 14, tag_days: int = 30) -> dict:
         return self.db.fetch_analytics_summary(trend_days=int(trend_days), tag_days=int(tag_days))
+
+    def project_id_for_task(self, task_id: int | None) -> int | None:
+        if task_id is None:
+            return None
+        return self.db.project_id_for_task(int(task_id))
+
+    def list_project_candidates(self) -> list[dict]:
+        return self.db.list_project_candidates()
+
+    def fetch_project_dashboard(self, project_task_id: int) -> dict | None:
+        return self.db.fetch_project_dashboard(int(project_task_id))
+
+    def ensure_project_profile(self, project_task_id: int) -> dict:
+        data = self.db.ensure_project_profile(int(project_task_id))
+        self.reload_all(reset_header_state=False)
+        return data
+
+    def save_project_profile(self, project_task_id: int, payload: dict) -> dict:
+        data = self.db.save_project_profile(int(project_task_id), payload)
+        self.reload_all(reset_header_state=False)
+        return data
+
+    def fetch_project_phases(self, project_task_id: int) -> list[dict]:
+        return self.db.fetch_project_phases(int(project_task_id))
+
+    def add_project_phase(self, project_task_id: int, name: str) -> int:
+        phase_id = self.db.add_project_phase(int(project_task_id), name)
+        self.reload_all(reset_header_state=False)
+        return phase_id
+
+    def update_project_phase(self, phase_id: int, name: str):
+        self.db.update_project_phase(int(phase_id), name)
+        self.reload_all(reset_header_state=False)
+
+    def delete_project_phase(self, phase_id: int):
+        self.db.delete_project_phase(int(phase_id))
+        self.reload_all(reset_header_state=False)
+
+    def set_task_phase(self, task_id: int, phase_id: int | None):
+        self.db.set_task_phase(int(task_id), None if phase_id is None else int(phase_id))
+        self._refresh_after_task_mutation([int(task_id)], reload=False)
+
+    def fetch_project_milestones(self, project_task_id: int) -> list[dict]:
+        return self.db.fetch_project_milestones(int(project_task_id))
+
+    def fetch_milestone_by_id(self, milestone_id: int) -> dict | None:
+        return self.db.fetch_milestone_by_id(int(milestone_id))
+
+    def capture_milestone_snapshot(self, milestone_id: int) -> dict | None:
+        return self.db.fetch_milestone_by_id(int(milestone_id))
+
+    def _restore_milestone_snapshot(self, snapshot: dict):
+        self.db.restore_milestone_snapshot(snapshot)
+
+    def upsert_milestone(self, payload: dict) -> int:
+        milestone_id = self.db.upsert_milestone(payload)
+        self.reload_all(reset_header_state=False)
+        return int(milestone_id)
+
+    def delete_milestone(self, milestone_id: int):
+        self.db.delete_milestone(int(milestone_id))
+        self.reload_all(reset_header_state=False)
+
+    def set_milestone_dates(
+        self,
+        milestone_id: int,
+        start_date: str | None,
+        target_date: str | None,
+    ):
+        mid = int(milestone_id)
+        current = self.db.fetch_milestone_by_id(mid)
+        if not current:
+            return
+        payload = dict(current)
+        payload["start_date"] = str(start_date or "").strip() or None
+        payload["target_date"] = str(target_date or "").strip() or None
+        self.undo_stack.push(
+            MilestoneMutationCommand(
+                self,
+                mid,
+                "Reschedule milestone",
+                lambda: self.db.upsert_milestone(payload),
+            )
+        )
+
+    def fetch_project_deliverables(self, project_task_id: int) -> list[dict]:
+        return self.db.fetch_project_deliverables(int(project_task_id))
+
+    def fetch_deliverable_by_id(self, deliverable_id: int) -> dict | None:
+        return self.db.fetch_deliverable_by_id(int(deliverable_id))
+
+    def capture_deliverable_snapshot(self, deliverable_id: int) -> dict | None:
+        return self.db.fetch_deliverable_by_id(int(deliverable_id))
+
+    def _restore_deliverable_snapshot(self, snapshot: dict):
+        self.db.restore_deliverable_snapshot(snapshot)
+
+    def upsert_deliverable(self, payload: dict) -> int:
+        deliverable_id = self.db.upsert_deliverable(payload)
+        self.reload_all(reset_header_state=False)
+        return int(deliverable_id)
+
+    def delete_deliverable(self, deliverable_id: int):
+        self.db.delete_deliverable(int(deliverable_id))
+        self.reload_all(reset_header_state=False)
+
+    def set_deliverable_due_date(self, deliverable_id: int, due_date: str | None):
+        did = int(deliverable_id)
+        current = self.db.fetch_deliverable_by_id(did)
+        if not current:
+            return
+        payload = dict(current)
+        payload["due_date"] = str(due_date or "").strip() or None
+        self.undo_stack.push(
+            DeliverableMutationCommand(
+                self,
+                did,
+                "Reschedule deliverable",
+                lambda: self.db.upsert_deliverable(payload),
+            )
+        )
+
+    def fetch_project_register_entries(self, project_task_id: int, entry_type: str | None = None) -> list[dict]:
+        return self.db.fetch_project_register_entries(int(project_task_id), entry_type=entry_type)
+
+    def fetch_register_entry_by_id(self, entry_id: int) -> dict | None:
+        return self.db.fetch_register_entry_by_id(int(entry_id))
+
+    def upsert_project_register_entry(self, payload: dict) -> int:
+        entry_id = self.db.upsert_project_register_entry(payload)
+        self.reload_all(reset_header_state=False)
+        return int(entry_id)
+
+    def delete_project_register_entry(self, entry_id: int):
+        self.db.delete_project_register_entry(int(entry_id))
+        self.reload_all(reset_header_state=False)
+
+    def fetch_project_baseline(self, project_task_id: int) -> dict | None:
+        return self.db.fetch_project_baseline(int(project_task_id))
+
+    def save_project_baseline(self, project_task_id: int, target_date: str | None, effort_minutes: int | None):
+        self.db.save_project_baseline(int(project_task_id), target_date, effort_minutes)
+        self.reload_all(reset_header_state=False)
 
     def add_attachment(self, task_id: int, path: str, label: str = ""):
         tid = int(task_id)

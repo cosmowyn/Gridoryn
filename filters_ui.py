@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from datetime import date
 
-from PySide6.QtCore import Signal, Qt, QDate
+from PySide6.QtCore import QDate, QSize, Signal, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDateEdit,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLineEdit,
     QPushButton,
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui_layout import (
+    SectionPanel,
     add_form_row,
     add_left_aligned_buttons,
     configure_box_layout,
@@ -40,9 +40,12 @@ class FilterPanel(QWidget):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
 
-        # --- Status group (multi-select)
-        g_status = QGroupBox("Status")
-        v_status = QVBoxLayout(g_status)
+        status_panel = SectionPanel(
+            "Status",
+            "Select which task statuses stay visible in the current view.",
+        )
+        v_status = QVBoxLayout()
+        configure_box_layout(v_status)
 
         self.chk_all_status = QCheckBox("All")
         self.chk_all_status.setChecked(True)
@@ -59,11 +62,15 @@ class FilterPanel(QWidget):
             self.status_checks.append(cb)
             v_status.addWidget(cb)
 
-        root.addWidget(g_status)
+        status_panel.body_layout.addLayout(v_status)
+        root.addWidget(status_panel)
 
-        # --- Priority group
-        g_prio = QGroupBox("Priority range")
-        h_prio = QFormLayout(g_prio)
+        planning_panel = SectionPanel(
+            "Priority and due range",
+            "Keep the most relevant work visible without leaving the current "
+            "perspective.",
+        )
+        h_prio = QFormLayout()
         configure_form_layout(h_prio, label_width=110)
 
         self.prio_min = QSpinBox()
@@ -80,12 +87,9 @@ class FilterPanel(QWidget):
 
         add_form_row(h_prio, "Minimum", self.prio_min)
         add_form_row(h_prio, "Maximum", self.prio_max)
+        planning_panel.body_layout.addLayout(h_prio)
 
-        root.addWidget(g_prio)
-
-        # --- Due range group
-        g_due = QGroupBox("Due date range")
-        v_due = QVBoxLayout(g_due)
+        v_due = QVBoxLayout()
         configure_box_layout(v_due)
 
         self.chk_due_range = QCheckBox("Enable due range")
@@ -112,12 +116,16 @@ class FilterPanel(QWidget):
         self.due_to.dateChanged.connect(self._emit_changed)
         add_form_row(due_form, "To", self.due_to)
         v_due.addLayout(due_form)
+        planning_panel.body_layout.addLayout(v_due)
+        root.addWidget(planning_panel)
 
-        root.addWidget(g_due)
-
-        # --- Toggles
-        g_flags = QGroupBox("Options")
-        v_flags = QVBoxLayout(g_flags)
+        flags_panel = SectionPanel(
+            "Options",
+            "Apply visibility rules that affect done, overdue, blocked, and "
+            "waiting work.",
+        )
+        v_flags = QVBoxLayout()
+        configure_box_layout(v_flags)
 
         self.chk_hide_done = QCheckBox("Hide Done")
         self.chk_hide_done.setToolTip("Exclude tasks already marked Done.")
@@ -145,28 +153,37 @@ class FilterPanel(QWidget):
         v_flags.addWidget(self.chk_blocked_only)
         v_flags.addWidget(self.chk_waiting_only)
         v_flags.addWidget(self.chk_show_children)
+        flags_panel.body_layout.addLayout(v_flags)
+        root.addWidget(flags_panel)
 
-        root.addWidget(g_flags)
-
-        # --- Tags
-        g_tags = QGroupBox("Tags")
-        v_tags = QVBoxLayout(g_tags)
+        tags_panel = SectionPanel(
+            "Tags",
+            "Filter to tasks that contain all listed tags.",
+        )
+        tags_panel.header_actions.addWidget(self._make_reset_button())
+        v_tags = QVBoxLayout()
+        configure_box_layout(v_tags)
         self.tags_input = QLineEdit()
         self.tags_input.setPlaceholderText("Comma-separated tags (all must match)")
         self.tags_input.setToolTip("Filter to tasks containing all listed tags.")
         self.tags_input.textChanged.connect(self._emit_changed)
         v_tags.addWidget(self.tags_input)
-        root.addWidget(g_tags)
+        tags_panel.body_layout.addLayout(v_tags)
+        root.addWidget(tags_panel)
 
-        # --- Reset
-        reset_row = QHBoxLayout()
+        root.addStretch(1)
+
+    def sizeHint(self) -> QSize:
+        return QSize(380, 560)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(320, 420)
+
+    def _make_reset_button(self) -> QPushButton:
         self.btn_reset = QPushButton("Reset filters")
         self.btn_reset.setToolTip("Reset all filter options to defaults.")
         self.btn_reset.clicked.connect(self.reset)
-        add_left_aligned_buttons(reset_row, self.btn_reset)
-        root.addLayout(reset_row)
-
-        root.addStretch(1)
+        return self.btn_reset
 
     def _emit_changed(self, *_):
         self.changed.emit()

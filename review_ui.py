@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -16,11 +15,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ui_layout import add_form_row, add_left_aligned_buttons, configure_box_layout, configure_form_layout
+from ui_layout import (
+    EmptyStateStack,
+    SectionPanel,
+    add_form_row,
+    add_left_aligned_buttons,
+    configure_box_layout,
+    configure_form_layout,
+)
 
 
 REVIEW_CATEGORIES: list[tuple[str, str]] = [
     ("overdue", "Overdue"),
+    ("overdue_milestones", "Overdue Milestones"),
+    ("deliverables_due_soon", "Deliverables Due Soon"),
+    ("high_risk_registers", "High-Severity Risks"),
     ("no_due", "No Due Date"),
     ("inbox_unprocessed", "Inbox Unprocessed"),
     ("stalled_projects", "Stalled Projects"),
@@ -31,6 +40,12 @@ REVIEW_CATEGORIES: list[tuple[str, str]] = [
     ("recent_done_archived", "Recent Done/Archived"),
     ("archive_roots", "Archive Roots"),
 ]
+
+PM_REVIEW_CATEGORIES = {
+    "overdue_milestones",
+    "deliverables_due_soon",
+    "high_risk_registers",
+}
 
 
 class ReviewWorkflowPanel(QWidget):
@@ -51,21 +66,25 @@ class ReviewWorkflowPanel(QWidget):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(8, 8, 8, 8), spacing=10)
 
-        guide_group = QGroupBox("Weekly review guide")
-        guide_layout = QVBoxLayout(guide_group)
-        configure_box_layout(guide_layout)
+        guide_panel = SectionPanel(
+            "Weekly review guide",
+            "Use the dock as a maintenance workflow, not just a category list.",
+        )
         self.guide = QLabel(
-            "Suggested flow: Inbox -> Overdue -> No Due Date -> Projects -> Waiting -> Archive. "
+            "Suggested flow: Inbox -> Overdue -> Milestones / Deliverables -> No Due Date -> "
+            "Projects -> Waiting -> Archive. "
             "Use Acknowledge to hide items you have already handled."
         )
         self.guide.setWordWrap(True)
         self.guide.setToolTip("Guidance for running a quick weekly review pass.")
-        guide_layout.addWidget(self.guide)
-        root.addWidget(guide_group)
+        guide_panel.body_layout.addWidget(self.guide)
+        root.addWidget(guide_panel)
 
-        controls_group = QGroupBox("Review controls")
-        controls_root = QVBoxLayout(controls_group)
-        configure_box_layout(controls_root)
+        controls_panel = SectionPanel(
+            "Review controls",
+            "Thresholds stay close to the refresh action so the review flow is "
+            "easy to re-run during a cleanup pass.",
+        )
         controls = QFormLayout()
         configure_form_layout(controls, label_width=160)
         self.waiting_days = QSpinBox()
@@ -85,27 +104,21 @@ class ReviewWorkflowPanel(QWidget):
         self.recent_days.setValue(30)
         self.recent_days.setSuffix(" days")
         add_form_row(controls, "Recent window", self.recent_days)
-        controls_root.addLayout(controls)
+        controls_panel.body_layout.addLayout(controls)
 
         self.refresh_btn = QPushButton("Refresh review")
         self.refresh_btn.setToolTip("Refresh all review categories using current thresholds.")
         controls_actions = QHBoxLayout()
         add_left_aligned_buttons(controls_actions, self.refresh_btn)
-        controls_root.addLayout(controls_actions)
-        root.addWidget(controls_group)
+        controls_panel.body_layout.addLayout(controls_actions)
+        root.addWidget(controls_panel)
 
-        self.tabs = QTabWidget()
-        root.addWidget(self.tabs, 1)
-
-        for key, label in REVIEW_CATEGORIES:
-            lw = QListWidget()
-            lw.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-            lw.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            lw.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            lw.setToolTip(f"{label} tasks. Double-click to focus.")
-            lw.itemDoubleClicked.connect(self._on_item_activated)
-            self.tabs.addTab(lw, label)
-            self._lists[key] = lw
+        content_panel = SectionPanel(
+            "Review categories",
+            "Actions stay attached to the category view instead of floating "
+            "below the full dock.",
+        )
+        root.addWidget(content_panel, 1)
 
         actions = QHBoxLayout()
         self.focus_btn = QPushButton("Focus")
@@ -132,16 +145,53 @@ class ReviewWorkflowPanel(QWidget):
             self.restore_btn,
             self.clear_ack_btn,
         )
-        root.addLayout(actions)
+        content_panel.body_layout.addLayout(actions)
+
+        self.tabs = QTabWidget()
+        content_panel.body_layout.addWidget(self.tabs, 1)
+
+        for key, label in REVIEW_CATEGORIES:
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            configure_box_layout(page_layout)
+            lw = QListWidget()
+            lw.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+            lw.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            lw.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            lw.setToolTip(f"{label} review items. Double-click to focus.")
+            lw.itemDoubleClicked.connect(self._on_item_activated)
+            lw.itemSelectionChanged.connect(self._update_action_states)
+            stack = EmptyStateStack(
+                lw,
+                f"No {label.lower()} right now.",
+                "Refresh review or adjust the thresholds to repopulate this category.",
+            )
+            page._stack = stack  # type: ignore[attr-defined]
+            page_layout.addWidget(stack, 1)
+            self.tabs.addTab(page, label)
+            self._lists[key] = lw
 
         self.refresh_btn.clicked.connect(self._emit_refresh)
         self.focus_btn.clicked.connect(self._emit_focus)
         self.use_btn.clicked.connect(lambda: self.useCategoryRequested.emit(self.current_category()))
-        self.ack_btn.clicked.connect(lambda: self.acknowledgeRequested.emit(self.current_category(), self.selected_task_ids()))
+        self.ack_btn.clicked.connect(
+            lambda: self.acknowledgeRequested.emit(
+                self.current_category(),
+                self.selected_review_keys(),
+            )
+        )
         self.done_btn.clicked.connect(lambda: self.markDoneRequested.emit(self.selected_task_ids()))
         self.archive_btn.clicked.connect(lambda: self.archiveRequested.emit(self.selected_task_ids()))
         self.restore_btn.clicked.connect(lambda: self.restoreRequested.emit(self.selected_task_ids()))
         self.clear_ack_btn.clicked.connect(lambda: self.clearAcknowledgedRequested.emit(self.current_category()))
+        self.tabs.currentChanged.connect(lambda _index: self._update_action_states())
+        self._update_action_states()
+
+    def sizeHint(self) -> QSize:
+        return QSize(560, 620)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(380, 460)
 
     def _emit_refresh(self):
         self.refreshRequested.emit(
@@ -155,7 +205,13 @@ class ReviewWorkflowPanel(QWidget):
         if idx < 0:
             return None
         w = self.tabs.widget(idx)
-        return w if isinstance(w, QListWidget) else None
+        if isinstance(w, QListWidget):
+            return w
+        if isinstance(w, QWidget):
+            for lst in self._lists.values():
+                if lst.parentWidget() is not None and lst.parentWidget().parentWidget() is w:
+                    return lst
+        return None
 
     def current_category(self) -> str:
         idx = self.tabs.currentIndex()
@@ -181,6 +237,20 @@ class ReviewWorkflowPanel(QWidget):
             ids.append(val)
         return ids
 
+    def selected_review_keys(self) -> list[str]:
+        lw = self._current_list()
+        if lw is None:
+            return []
+        keys: list[str] = []
+        seen: set[str] = set()
+        for it in lw.selectedItems():
+            raw = str(it.data(Qt.ItemDataRole.UserRole + 1) or "").strip()
+            if not raw or raw in seen:
+                continue
+            seen.add(raw)
+            keys.append(raw)
+        return keys
+
     def _on_item_activated(self, item: QListWidgetItem):
         if item is None:
             return
@@ -196,6 +266,19 @@ class ReviewWorkflowPanel(QWidget):
         ids = self.selected_task_ids()
         if ids:
             self.focusTaskRequested.emit(int(ids[0]))
+
+    def _update_action_states(self):
+        category = self.current_category()
+        task_ids = self.selected_task_ids()
+        can_focus = bool(task_ids)
+        is_pm_category = category in PM_REVIEW_CATEGORIES
+        self.focus_btn.setEnabled(can_focus)
+        self.use_btn.setEnabled(True)
+        self.ack_btn.setEnabled(bool(self.selected_review_keys()))
+        self.clear_ack_btn.setEnabled(True)
+        self.done_btn.setEnabled(bool(task_ids) and not is_pm_category)
+        self.archive_btn.setEnabled(bool(task_ids) and not is_pm_category)
+        self.restore_btn.setEnabled(bool(task_ids) and not is_pm_category)
 
     def _format_item_text(self, row: dict) -> str:
         desc = str(row.get("description") or "")
@@ -224,12 +307,23 @@ class ReviewWorkflowPanel(QWidget):
             lw.clear()
             for row in rows:
                 item = QListWidgetItem(self._format_item_text(row))
-                item.setData(Qt.ItemDataRole.UserRole, int(row.get("id") or 0))
+                focus_id = int(row.get("review_focus_id") or row.get("id") or 0)
+                item.setData(Qt.ItemDataRole.UserRole, focus_id)
+                item.setData(
+                    Qt.ItemDataRole.UserRole + 1,
+                    str(row.get("review_key") or row.get("id") or "").strip(),
+                )
                 lw.addItem(item)
-            tab_idx = self.tabs.indexOf(lw)
+            parent_page = lw.parentWidget().parentWidget() if lw.parentWidget() is not None else None
+            tab_idx = self.tabs.indexOf(parent_page) if isinstance(parent_page, QWidget) else -1
             if tab_idx >= 0:
                 self.tabs.setTabText(tab_idx, f"{label} ({len(rows)})")
+            stack = getattr(parent_page, "_stack", None)
+            if isinstance(stack, EmptyStateStack):
+                stack.set_has_content(bool(rows))
         self.guide.setText(
-            "Suggested flow: Inbox -> Overdue -> No Due Date -> Projects -> Waiting -> Archive. "
+            "Suggested flow: Inbox -> Overdue -> Milestones / Deliverables -> No Due Date -> "
+            "Projects -> Waiting -> Archive. "
             f"Visible items: {total_visible}. Hidden handled items: {total_hidden}."
         )
+        self._update_action_states()

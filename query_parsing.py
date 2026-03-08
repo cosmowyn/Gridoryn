@@ -44,6 +44,7 @@ class ParsedSearch:
     due_none: bool = False
     tags: set[str] = field(default_factory=set)
     bucket: str | None = None
+    phase: str | None = None
     has_children: bool | None = None
     blocked_only: bool = False
     waiting_only: bool = False
@@ -422,6 +423,14 @@ def parse_search_query(text: str) -> ParsedSearch:
                 out.bucket = bucket
             else:
                 out.parse_warnings.append(f"Ignored invalid bucket token: {s}")
+            continue
+
+        if sl.startswith("phase:"):
+            phase = s.split(":", 1)[1].strip()
+            if phase:
+                out.phase = phase.lower()
+            else:
+                out.parse_warnings.append(f"Ignored invalid phase token: {s}")
             continue
 
         if sl == "has:children":

@@ -46,3 +46,9 @@ def test_filter_proxy_search_tags_and_perspectives(tmp_path, qapp):
     tagged_rows = _visible_descriptions(proxy)
     assert any("Finalize landing page copy" in row for row in tagged_rows)
     assert all("Demo: Someday - redesign office storage" not in row for row in tagged_rows)
+
+    proxy.set_tag_filter(set())
+    proxy.set_search_text("phase:approval")
+    approval_rows = _visible_descriptions(proxy)
+    assert any("Get legal sign-off" in row for row in approval_rows)
+    assert all("Await sponsor response" not in row for row in approval_rows)

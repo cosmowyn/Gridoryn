@@ -23,3 +23,4 @@ def test_build_diagnostics_report_includes_workspace_and_snapshot(tmp_path):
     assert report["workspace_path"] == str(tmp_path)
     assert report["latest_snapshot"]["path"] == str(snapshot)
     assert report["items"]
+    assert any(item.label == "Project-management integrity" for item in report["items"])

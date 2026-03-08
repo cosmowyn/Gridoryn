@@ -31,11 +31,13 @@ def build_diagnostics_report(db, theme_name: str, workspace_name: str = "", work
     invalid_sort_groups = integrity.get("invalid_sibling_sort_orders") or []
     orphaned_custom = integrity.get("orphaned_custom_values") or {}
     malformed_recurrence = integrity.get("malformed_recurrence") or {}
+    project_management = integrity.get("project_management") or {}
     missing_attachments = integrity.get("missing_file_attachments") or []
     fk_violations = integrity.get("foreign_key_violations") or []
 
     orphan_total = len(orphaned_custom.get("missing_tasks") or []) + len(orphaned_custom.get("missing_columns") or [])
     recurrence_total = sum(len(v) for v in malformed_recurrence.values())
+    pm_total = sum(len(v) for v in project_management.values())
 
     items = [
         DiagnosticItem(
@@ -93,6 +95,12 @@ def build_diagnostics_report(db, theme_name: str, workspace_name: str = "", work
             "\n".join(_recurrence_lines(malformed_recurrence)),
         ),
         DiagnosticItem(
+            _status_for_count(pm_total),
+            "Project-management integrity",
+            f"{pm_total} PM reference issue(s) detected.",
+            "\n".join(_project_management_lines(project_management)),
+        ),
+        DiagnosticItem(
             _status_for_count(len(missing_attachments)),
             "Missing attachments",
             f"{len(missing_attachments)} attachment path(s) are missing on disk.",
@@ -134,6 +142,20 @@ def _recurrence_lines(report: dict[str, list[dict]]) -> Iterable[str]:
         ("task_rule_missing", "Task missing rule"),
         ("task_rule_mismatch", "Task/rule mismatch"),
         ("generated_origin_missing", "Generated task missing origin"),
+    ):
+        rows = report.get(key) or []
+        for row in rows[:10]:
+            identifier = row.get("id", row.get("task_id", "?"))
+            yield f"{label}: {identifier}"
+
+
+def _project_management_lines(report: dict[str, list[dict]]) -> Iterable[str]:
+    for key, label in (
+        ("broken_task_phase_refs", "Broken task phase ref"),
+        ("broken_pm_dependencies", "Broken PM dependency"),
+        ("malformed_milestones", "Malformed milestone"),
+        ("malformed_deliverables", "Malformed deliverable"),
+        ("malformed_register_entries", "Malformed register entry"),
     ):
         rows = report.get(key) or []
         for row in rows[:10]:

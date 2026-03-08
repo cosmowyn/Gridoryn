@@ -14,8 +14,8 @@ from crash_logging import log_event, log_exception
 from db import Database, now_iso
 
 
-FORMAT_VERSION = 2
-SUPPORTED_FORMAT_VERSIONS = {1, 2}
+FORMAT_VERSION = 3
+SUPPORTED_FORMAT_VERSIONS = {1, 2, 3}
 ALLOWED_COL_TYPES = {"text", "int", "date", "bool", "list"}
 
 
@@ -168,7 +168,8 @@ def export_payload(db: Database) -> dict:
                effort_minutes, actual_minutes, timer_started_at,
                waiting_for,
                recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
-               reminder_at, reminder_minutes_before, reminder_fired_at
+               reminder_at, reminder_minutes_before, reminder_fired_at,
+               start_date, phase_id
         FROM tasks
         ORDER BY COALESCE(parent_id, 0), sort_order ASC, id ASC;
         """
@@ -264,6 +265,74 @@ def export_payload(db: Database) -> dict:
     )
     templates = [dict(r) for r in cur.fetchall()]
 
+    cur.execute(
+        """
+        SELECT task_id, objective, scope, out_of_scope, owner, stakeholders, target_date,
+               success_criteria, project_status_health, summary, category, created_at, updated_at
+        FROM project_profiles
+        ORDER BY task_id;
+        """
+    )
+    project_profiles = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT id, project_task_id, name, sort_order, created_at, updated_at
+        FROM project_phases
+        ORDER BY project_task_id, sort_order, id;
+        """
+    )
+    project_phases = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT id, predecessor_kind, predecessor_id, successor_kind, successor_id, dep_type, is_soft, created_at
+        FROM pm_dependencies
+        ORDER BY predecessor_kind, predecessor_id, successor_kind, successor_id, id;
+        """
+    )
+    pm_dependencies = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT id, project_task_id, title, description, phase_id, linked_task_id, start_date, target_date,
+               baseline_target_date, status, progress_percent, completed_at, created_at, updated_at
+        FROM milestones
+        ORDER BY project_task_id, COALESCE(target_date, '9999-12-31'), id;
+        """
+    )
+    milestones = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT id, project_task_id, title, description, phase_id, linked_task_id, linked_milestone_id,
+               due_date, baseline_due_date, acceptance_criteria, version_ref, status, completed_at,
+               created_at, updated_at
+        FROM deliverables
+        ORDER BY project_task_id, COALESCE(due_date, '9999-12-31'), id;
+        """
+    )
+    deliverables = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT id, project_task_id, entry_type, title, details, status, severity, review_date,
+               linked_task_id, linked_milestone_id, created_at, updated_at
+        FROM project_register_entries
+        ORDER BY project_task_id, created_at, id;
+        """
+    )
+    project_register_entries = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT project_task_id, target_date, effort_minutes, created_at, updated_at
+        FROM project_baselines
+        ORDER BY project_task_id;
+        """
+    )
+    project_baselines = [dict(r) for r in cur.fetchall()]
+
     payload_wo_checksum = {
         "format_version": FORMAT_VERSION,
         "exported_at": now_iso(),
@@ -281,6 +350,13 @@ def export_payload(db: Database) -> dict:
         "recurrence_rules": recurrence_rules,
         "saved_filter_views": saved_filter_views,
         "templates": templates,
+        "project_profiles": project_profiles,
+        "project_phases": project_phases,
+        "pm_dependencies": pm_dependencies,
+        "milestones": milestones,
+        "deliverables": deliverables,
+        "project_register_entries": project_register_entries,
+        "project_baselines": project_baselines,
     }
 
     checksum = _sha256_canonical_json(payload_wo_checksum)
@@ -378,6 +454,13 @@ def import_payload(parent: QWidget, payload: dict, target_db: Database) -> Impor
     src_recurrence = payload.get("recurrence_rules") or []
     src_saved_views = payload.get("saved_filter_views") or []
     src_templates = payload.get("templates") or []
+    src_project_profiles = payload.get("project_profiles") or []
+    src_project_phases = payload.get("project_phases") or []
+    src_pm_dependencies = payload.get("pm_dependencies") or []
+    src_milestones = payload.get("milestones") or []
+    src_deliverables = payload.get("deliverables") or []
+    src_project_register_entries = payload.get("project_register_entries") or []
+    src_project_baselines = payload.get("project_baselines") or []
 
     tgt_cols = _get_target_columns(target_db)
     tgt_col_names = set(tgt_cols.keys())
@@ -442,6 +525,13 @@ def import_payload(parent: QWidget, payload: dict, target_db: Database) -> Impor
                 cur.execute("DELETE FROM tasks;")
                 cur.execute("DELETE FROM saved_filter_views;")
                 cur.execute("DELETE FROM task_templates;")
+                cur.execute("DELETE FROM project_register_entries;")
+                cur.execute("DELETE FROM deliverables;")
+                cur.execute("DELETE FROM milestones;")
+                cur.execute("DELETE FROM pm_dependencies;")
+                cur.execute("DELETE FROM project_baselines;")
+                cur.execute("DELETE FROM project_phases;")
+                cur.execute("DELETE FROM project_profiles;")
 
             if allowed_missing and create_missing:
                 for c in allowed_missing:
@@ -511,6 +601,18 @@ def import_payload(parent: QWidget, payload: dict, target_db: Database) -> Impor
 
             _import_task_extras(cur, src_tasks, task_id_map)
             _import_recurrence(cur, src_recurrence, src_tasks, task_id_map)
+            phase_id_map = _import_project_profiles_and_phases(
+                cur,
+                src_project_profiles,
+                src_project_phases,
+                task_id_map,
+            )
+            _apply_task_phase_assignments(cur, src_tasks, task_id_map, phase_id_map)
+            milestone_id_map = _import_milestones(cur, src_milestones, task_id_map, phase_id_map)
+            _import_deliverables(cur, src_deliverables, task_id_map, phase_id_map, milestone_id_map)
+            _import_project_register_entries(cur, src_project_register_entries, task_id_map, milestone_id_map)
+            _import_project_baselines(cur, src_project_baselines, task_id_map)
+            _import_pm_dependencies(cur, src_pm_dependencies, task_id_map, milestone_id_map)
             _import_saved_filter_views(cur, src_saved_views)
             _import_templates(cur, src_templates)
 
@@ -543,6 +645,8 @@ def _task_insert_values(t: dict, parent_id, sort_order: int):
         t.get("reminder_at"),
         t.get("reminder_minutes_before"),
         t.get("reminder_fired_at"),
+        t.get("start_date"),
+        t.get("phase_id"),
     )
 
 
@@ -577,8 +681,9 @@ def _import_tasks_keep_ids(
                                       effort_minutes, actual_minutes, timer_started_at,
                                       waiting_for,
                                       recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
-                                      reminder_at, reminder_minutes_before, reminder_fired_at)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      reminder_at, reminder_minutes_before, reminder_fired_at,
+                                      start_date, phase_id)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (tid, *_task_insert_values(t, parent_id, int(t.get("sort_order", 1)))),
                 )
@@ -601,8 +706,9 @@ def _import_tasks_keep_ids(
                                       effort_minutes, actual_minutes, timer_started_at,
                                       waiting_for,
                                       recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
-                                      reminder_at, reminder_minutes_before, reminder_fired_at)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      reminder_at, reminder_minutes_before, reminder_fired_at,
+                                      start_date, phase_id)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (tid, *_task_insert_values(t, None, int(t.get("sort_order", 1)))),
                 )
@@ -661,8 +767,9 @@ def _import_tasks_merge(cur, src_tasks: list[dict], tgt_cols: dict, report: Impo
                                   effort_minutes, actual_minutes, timer_started_at,
                                   waiting_for,
                                   recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
-                                  reminder_at, reminder_minutes_before, reminder_fired_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                  reminder_at, reminder_minutes_before, reminder_fired_at,
+                                  start_date, phase_id)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 _task_insert_values(t, new_parent, sort_order),
             )
@@ -685,8 +792,9 @@ def _import_tasks_merge(cur, src_tasks: list[dict], tgt_cols: dict, report: Impo
                                       effort_minutes, actual_minutes, timer_started_at,
                                       waiting_for,
                                       recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
-                                      reminder_at, reminder_minutes_before, reminder_fired_at)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      reminder_at, reminder_minutes_before, reminder_fired_at,
+                                      start_date, phase_id)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     _task_insert_values(t, None, int(t.get("sort_order", 1))),
                 )
@@ -785,6 +893,22 @@ def _import_task_extras(cur, src_tasks: list[dict], id_map: dict[int, int]) -> N
                 """,
                 (int(new_tid), int(dep_new)),
             )
+            cur.execute(
+                """
+                INSERT INTO pm_dependencies(
+                    predecessor_kind,
+                    predecessor_id,
+                    successor_kind,
+                    successor_id,
+                    dep_type,
+                    is_soft,
+                    created_at
+                )
+                VALUES('task', ?, 'task', ?, 'finish_to_start', 0, ?)
+                ON CONFLICT(predecessor_kind, predecessor_id, successor_kind, successor_id, dep_type) DO NOTHING;
+                """,
+                (int(dep_new), int(new_tid), now_iso()),
+            )
 
 
 def _import_recurrence(cur, src_recurrence: list[dict], src_tasks: list[dict], id_map: dict[int, int]) -> None:
@@ -857,6 +981,401 @@ def _import_recurrence(cur, src_recurrence: list[dict], src_tasks: list[dict], i
                 new_origin,
                 int(t.get("is_generated_occurrence", 0) or 0),
                 int(new_tid),
+            ),
+        )
+
+
+def _import_project_profiles_and_phases(
+    cur,
+    project_profiles: list[dict],
+    project_phases: list[dict],
+    task_id_map: dict[int, int],
+) -> dict[int, int]:
+    phase_id_map: dict[int, int] = {}
+
+    for row in project_profiles:
+        if not isinstance(row, dict):
+            continue
+        try:
+            old_task_id = int(row.get("task_id"))
+        except Exception:
+            continue
+        new_task_id = task_id_map.get(old_task_id)
+        if not new_task_id:
+            continue
+        cur.execute(
+            """
+            INSERT INTO project_profiles(
+                task_id,
+                objective,
+                scope,
+                out_of_scope,
+                owner,
+                stakeholders,
+                target_date,
+                success_criteria,
+                project_status_health,
+                summary,
+                category,
+                created_at,
+                updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+                objective=excluded.objective,
+                scope=excluded.scope,
+                out_of_scope=excluded.out_of_scope,
+                owner=excluded.owner,
+                stakeholders=excluded.stakeholders,
+                target_date=excluded.target_date,
+                success_criteria=excluded.success_criteria,
+                project_status_health=excluded.project_status_health,
+                summary=excluded.summary,
+                category=excluded.category,
+                updated_at=excluded.updated_at;
+            """,
+            (
+                int(new_task_id),
+                str(row.get("objective") or ""),
+                str(row.get("scope") or ""),
+                str(row.get("out_of_scope") or ""),
+                str(row.get("owner") or "Self"),
+                str(row.get("stakeholders") or ""),
+                str(row.get("target_date") or "").strip() or None,
+                str(row.get("success_criteria") or ""),
+                str(row.get("project_status_health") or "").strip() or None,
+                str(row.get("summary") or ""),
+                str(row.get("category") or ""),
+                str(row.get("created_at") or now_iso()),
+                str(row.get("updated_at") or now_iso()),
+            ),
+        )
+
+    for row in project_phases:
+        if not isinstance(row, dict):
+            continue
+        try:
+            old_phase_id = int(row.get("id"))
+            old_project_id = int(row.get("project_task_id"))
+        except Exception:
+            continue
+        new_project_id = task_id_map.get(old_project_id)
+        if not new_project_id:
+            continue
+        cur.execute(
+            """
+            INSERT INTO project_phases(project_task_id, name, sort_order, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?);
+            """,
+            (
+                int(new_project_id),
+                str(row.get("name") or ""),
+                int(row.get("sort_order") or 1),
+                str(row.get("created_at") or now_iso()),
+                str(row.get("updated_at") or now_iso()),
+            ),
+        )
+        phase_id_map[int(old_phase_id)] = int(cur.lastrowid)
+    return phase_id_map
+
+
+def _apply_task_phase_assignments(cur, src_tasks: list[dict], task_id_map: dict[int, int], phase_id_map: dict[int, int]) -> None:
+    for task in src_tasks:
+        if not isinstance(task, dict):
+            continue
+        try:
+            old_task_id = int(task.get("id"))
+        except Exception:
+            continue
+        new_task_id = task_id_map.get(old_task_id)
+        if not new_task_id:
+            continue
+        old_phase_id = task.get("phase_id")
+        if old_phase_id is None:
+            continue
+        try:
+            mapped_phase_id = phase_id_map.get(int(old_phase_id))
+        except Exception:
+            mapped_phase_id = None
+        cur.execute(
+            "UPDATE tasks SET phase_id=?, start_date=? WHERE id=?;",
+            (mapped_phase_id, task.get("start_date"), int(new_task_id)),
+        )
+
+
+def _import_milestones(cur, milestones: list[dict], task_id_map: dict[int, int], phase_id_map: dict[int, int]) -> dict[int, int]:
+    milestone_id_map: dict[int, int] = {}
+    for row in milestones:
+        if not isinstance(row, dict):
+            continue
+        try:
+            old_id = int(row.get("id"))
+            old_project_id = int(row.get("project_task_id"))
+        except Exception:
+            continue
+        new_project_id = task_id_map.get(old_project_id)
+        if not new_project_id:
+            continue
+        linked_task_id = None
+        if row.get("linked_task_id") is not None:
+            try:
+                linked_task_id = task_id_map.get(int(row.get("linked_task_id")))
+            except Exception:
+                linked_task_id = None
+        phase_id = None
+        if row.get("phase_id") is not None:
+            try:
+                phase_id = phase_id_map.get(int(row.get("phase_id")))
+            except Exception:
+                phase_id = None
+        cur.execute(
+            """
+            INSERT INTO milestones(
+                project_task_id,
+                title,
+                description,
+                phase_id,
+                linked_task_id,
+                start_date,
+                target_date,
+                baseline_target_date,
+                status,
+                progress_percent,
+                completed_at,
+                created_at,
+                updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                int(new_project_id),
+                str(row.get("title") or ""),
+                str(row.get("description") or ""),
+                phase_id,
+                linked_task_id,
+                row.get("start_date"),
+                row.get("target_date"),
+                row.get("baseline_target_date"),
+                str(row.get("status") or "planned"),
+                int(row.get("progress_percent") or 0),
+                row.get("completed_at"),
+                str(row.get("created_at") or now_iso()),
+                str(row.get("updated_at") or now_iso()),
+            ),
+        )
+        milestone_id_map[int(old_id)] = int(cur.lastrowid)
+    return milestone_id_map
+
+
+def _import_deliverables(
+    cur,
+    deliverables: list[dict],
+    task_id_map: dict[int, int],
+    phase_id_map: dict[int, int],
+    milestone_id_map: dict[int, int],
+) -> None:
+    for row in deliverables:
+        if not isinstance(row, dict):
+            continue
+        try:
+            old_project_id = int(row.get("project_task_id"))
+        except Exception:
+            continue
+        new_project_id = task_id_map.get(old_project_id)
+        if not new_project_id:
+            continue
+        linked_task_id = None
+        linked_milestone_id = None
+        phase_id = None
+        try:
+            if row.get("linked_task_id") is not None:
+                linked_task_id = task_id_map.get(int(row.get("linked_task_id")))
+        except Exception:
+            linked_task_id = None
+        try:
+            if row.get("linked_milestone_id") is not None:
+                linked_milestone_id = milestone_id_map.get(int(row.get("linked_milestone_id")))
+        except Exception:
+            linked_milestone_id = None
+        try:
+            if row.get("phase_id") is not None:
+                phase_id = phase_id_map.get(int(row.get("phase_id")))
+        except Exception:
+            phase_id = None
+        cur.execute(
+            """
+            INSERT INTO deliverables(
+                project_task_id,
+                title,
+                description,
+                phase_id,
+                linked_task_id,
+                linked_milestone_id,
+                due_date,
+                baseline_due_date,
+                acceptance_criteria,
+                version_ref,
+                status,
+                completed_at,
+                created_at,
+                updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                int(new_project_id),
+                str(row.get("title") or ""),
+                str(row.get("description") or ""),
+                phase_id,
+                linked_task_id,
+                linked_milestone_id,
+                row.get("due_date"),
+                row.get("baseline_due_date"),
+                str(row.get("acceptance_criteria") or ""),
+                str(row.get("version_ref") or ""),
+                str(row.get("status") or "planned"),
+                row.get("completed_at"),
+                str(row.get("created_at") or now_iso()),
+                str(row.get("updated_at") or now_iso()),
+            ),
+        )
+
+
+def _import_project_register_entries(
+    cur,
+    entries: list[dict],
+    task_id_map: dict[int, int],
+    milestone_id_map: dict[int, int],
+) -> None:
+    for row in entries:
+        if not isinstance(row, dict):
+            continue
+        try:
+            old_project_id = int(row.get("project_task_id"))
+        except Exception:
+            continue
+        new_project_id = task_id_map.get(old_project_id)
+        if not new_project_id:
+            continue
+        linked_task_id = None
+        linked_milestone_id = None
+        try:
+            if row.get("linked_task_id") is not None:
+                linked_task_id = task_id_map.get(int(row.get("linked_task_id")))
+        except Exception:
+            linked_task_id = None
+        try:
+            if row.get("linked_milestone_id") is not None:
+                linked_milestone_id = milestone_id_map.get(int(row.get("linked_milestone_id")))
+        except Exception:
+            linked_milestone_id = None
+        cur.execute(
+            """
+            INSERT INTO project_register_entries(
+                project_task_id,
+                entry_type,
+                title,
+                details,
+                status,
+                severity,
+                review_date,
+                linked_task_id,
+                linked_milestone_id,
+                created_at,
+                updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                int(new_project_id),
+                str(row.get("entry_type") or "risk"),
+                str(row.get("title") or ""),
+                str(row.get("details") or ""),
+                str(row.get("status") or "open"),
+                row.get("severity"),
+                row.get("review_date"),
+                linked_task_id,
+                linked_milestone_id,
+                str(row.get("created_at") or now_iso()),
+                str(row.get("updated_at") or now_iso()),
+            ),
+        )
+
+
+def _import_project_baselines(cur, baselines: list[dict], task_id_map: dict[int, int]) -> None:
+    for row in baselines:
+        if not isinstance(row, dict):
+            continue
+        try:
+            old_project_id = int(row.get("project_task_id"))
+        except Exception:
+            continue
+        new_project_id = task_id_map.get(old_project_id)
+        if not new_project_id:
+            continue
+        cur.execute(
+            """
+            INSERT INTO project_baselines(project_task_id, target_date, effort_minutes, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(project_task_id) DO UPDATE SET
+                target_date=excluded.target_date,
+                effort_minutes=excluded.effort_minutes,
+                updated_at=excluded.updated_at;
+            """,
+            (
+                int(new_project_id),
+                row.get("target_date"),
+                row.get("effort_minutes"),
+                str(row.get("created_at") or now_iso()),
+                str(row.get("updated_at") or now_iso()),
+            ),
+        )
+
+
+def _import_pm_dependencies(
+    cur,
+    dependencies: list[dict],
+    task_id_map: dict[int, int],
+    milestone_id_map: dict[int, int],
+) -> None:
+    for row in dependencies:
+        if not isinstance(row, dict):
+            continue
+        pre_kind = str(row.get("predecessor_kind") or "").strip().lower()
+        succ_kind = str(row.get("successor_kind") or "").strip().lower()
+        if pre_kind not in {"task", "milestone"} or succ_kind not in {"task", "milestone"}:
+            continue
+        try:
+            pre_old = int(row.get("predecessor_id"))
+            succ_old = int(row.get("successor_id"))
+        except Exception:
+            continue
+        pre_new = task_id_map.get(pre_old) if pre_kind == "task" else milestone_id_map.get(pre_old)
+        succ_new = task_id_map.get(succ_old) if succ_kind == "task" else milestone_id_map.get(succ_old)
+        if not pre_new or not succ_new:
+            continue
+        cur.execute(
+            """
+            INSERT INTO pm_dependencies(
+                predecessor_kind,
+                predecessor_id,
+                successor_kind,
+                successor_id,
+                dep_type,
+                is_soft,
+                created_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(predecessor_kind, predecessor_id, successor_kind, successor_id, dep_type) DO NOTHING;
+            """,
+            (
+                pre_kind,
+                int(pre_new),
+                succ_kind,
+                int(succ_new),
+                str(row.get("dep_type") or "finish_to_start"),
+                int(row.get("is_soft") or 0),
+                str(row.get("created_at") or now_iso()),
             ),
         )
 
@@ -1049,6 +1568,18 @@ def _validate_payload_shape(payload: dict) -> None:
 
     if "recurrence_rules" in payload and not isinstance(payload["recurrence_rules"], list):
         raise BackupError("Backup field 'recurrence_rules' must be a list if present.")
+
+    for key in (
+        "project_profiles",
+        "project_phases",
+        "pm_dependencies",
+        "milestones",
+        "deliverables",
+        "project_register_entries",
+        "project_baselines",
+    ):
+        if key in payload and not isinstance(payload[key], list):
+            raise BackupError(f"Backup field '{key}' must be a list if present.")
 
 
 def _sha256_canonical_json(obj: dict) -> str:

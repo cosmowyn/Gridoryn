@@ -1,27 +1,35 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
+    QComboBox,
+    QCheckBox,
     QFormLayout,
     QGridLayout,
-    QGroupBox,
-    QLabel,
-    QPlainTextEdit,
-    QLineEdit,
-    QComboBox,
-    QSpinBox,
-    QCheckBox,
-    QPushButton,
     QHBoxLayout,
+    QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
 )
 
-from delegates import DateTimeEditorWithClear
+from delegates import DateEditorWithClear, DateTimeEditorWithClear
 from model import PLANNED_BUCKETS, RECURRENCE_FREQUENCIES
-from ui_layout import add_form_row, add_left_aligned_buttons, configure_box_layout, configure_form_layout, configure_grid_layout
+from ui_layout import (
+    EmptyStateStack,
+    SectionPanel,
+    add_form_row,
+    add_left_aligned_buttons,
+    configure_box_layout,
+    configure_form_layout,
+    configure_grid_layout,
+)
 
 
 def _safe_int(value, default=0):
@@ -47,15 +55,17 @@ class TaskDetailsPanel(QWidget):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(8, 8, 8, 8), spacing=10)
 
-        browser_group = QGroupBox("Task browser")
-        browser_layout = QVBoxLayout(browser_group)
-        configure_box_layout(browser_layout)
+        browser_panel = SectionPanel(
+            "Task browser",
+            "Browse the current visible task set even when the main tree is "
+            "hidden or floated to another monitor.",
+        )
 
         self.browser_summary = QLabel("No visible tasks in the current view.")
         self.browser_summary.setWordWrap(True)
         self.browser_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.browser_summary.setToolTip("Browse tasks even when the main table is hidden.")
-        browser_layout.addWidget(self.browser_summary)
+        browser_panel.body_layout.addWidget(self.browser_summary)
 
         browser_grid = QGridLayout()
         configure_grid_layout(browser_grid)
@@ -84,36 +94,45 @@ class TaskDetailsPanel(QWidget):
         browser_grid.addWidget(self.next_child_btn, 1, 3)
         browser_grid.addWidget(self.toggle_table_btn, 2, 0, 1, 2)
         browser_grid.setColumnStretch(4, 1)
-        browser_layout.addLayout(browser_grid)
-        root.addWidget(browser_group)
+        browser_panel.body_layout.addLayout(browser_grid)
+        root.addWidget(browser_panel)
 
+        summary_panel = SectionPanel(
+            "Selection summary",
+            "Keep the current task state, project intelligence, and progress "
+            "context visible above the editable fields.",
+        )
         self.meta = QLabel("No task selected")
         self.meta.setWordWrap(True)
         self.meta.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.meta.setToolTip("Read-only summary of selected task and progress.")
-        root.addWidget(self.meta)
+        summary_panel.body_layout.addWidget(self.meta)
 
-        project_group = QGroupBox("Project intelligence")
-        project_layout = QVBoxLayout(project_group)
-        configure_box_layout(project_layout)
         self.project_insights = QLabel("No project insights available.")
         self.project_insights.setWordWrap(True)
         self.project_insights.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.project_insights.setToolTip("Next-action, blocked/stalled state, and related project insight.")
-        project_layout.addWidget(self.project_insights)
-        root.addWidget(project_group)
+        summary_panel.body_layout.addWidget(self.project_insights)
+        root.addWidget(summary_panel)
 
-        editor_group = QGroupBox("Task details")
-        editor_layout = QVBoxLayout(editor_group)
-        configure_box_layout(editor_layout)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.setChildrenCollapsible(False)
+        root.addWidget(splitter, 1)
+
+        editor_panel = SectionPanel(
+            "Task details",
+            "Edit planning, dependencies, effort, reminders, and recurrence "
+            "without losing the task context above.",
+        )
+        splitter.addWidget(editor_panel)
+
         form = QFormLayout()
         configure_form_layout(form, label_width=130)
-        editor_layout.addLayout(form)
-        root.addWidget(editor_group)
+        editor_panel.body_layout.addLayout(form)
 
         self.notes = QPlainTextEdit()
         self.notes.setPlaceholderText("Task notes...")
-        self.notes.setFixedHeight(120)
+        self.notes.setFixedHeight(96)
         self.notes.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.notes.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.notes.setToolTip("Long-form notes for selected task.")
@@ -128,6 +147,15 @@ class TaskDetailsPanel(QWidget):
         self.bucket.addItems(PLANNED_BUCKETS)
         self.bucket.setToolTip("Planning bucket used by built-in perspectives.")
         add_form_row(form, "Bucket", self.bucket)
+
+        self.start_date = DateEditorWithClear()
+        self.start_date.setToolTip("Optional planned start date for timeline and scheduling views.")
+        add_form_row(form, "Start date", self.start_date)
+
+        self.phase = QComboBox()
+        self.phase.addItem("(none)", None)
+        self.phase.setToolTip("Optional project phase for this task.")
+        add_form_row(form, "Phase", self.phase)
 
         self.waiting_for = QLineEdit()
         self.waiting_for.setPlaceholderText("Waiting for (optional)")
@@ -173,8 +201,7 @@ class TaskDetailsPanel(QWidget):
         rem_row.addWidget(self.reminder_before_minutes)
         add_form_row(form, "Reminder", self._wrap(rem_row))
 
-        actions_group = QGroupBox("Task actions")
-        actions_layout = QGridLayout(actions_group)
+        actions_layout = QGridLayout()
         configure_grid_layout(actions_layout)
         self.save_btn = QPushButton("Save details")
         self.save_btn.setToolTip("Save edited task metadata from this panel.")
@@ -195,17 +222,18 @@ class TaskDetailsPanel(QWidget):
         actions_layout.addWidget(self.set_due_reminder_btn, 1, 1)
         actions_layout.addWidget(self.clear_reminder_btn, 1, 2)
         actions_layout.setColumnStretch(3, 1)
-        root.addWidget(actions_group)
+        editor_panel.body_layout.addLayout(actions_layout)
 
-        attachments_group = QGroupBox("Attachments")
-        attachments_layout = QVBoxLayout(attachments_group)
-        configure_box_layout(attachments_layout)
+        attachments_panel = SectionPanel(
+            "Attachments",
+            "Keep file and folder references close to the task they support.",
+        )
+        splitter.addWidget(attachments_panel)
+
         self.attachments = QListWidget()
         self.attachments.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.attachments.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.attachments.setToolTip("Linked files/folders for this task.")
-        attachments_layout.addWidget(self.attachments, 1)
-
         att_row = QHBoxLayout()
         configure_box_layout(att_row)
         self.add_file_btn = QPushButton("Add file")
@@ -223,8 +251,15 @@ class TaskDetailsPanel(QWidget):
             self.open_attachment_btn,
             self.remove_attachment_btn,
         )
-        attachments_layout.addLayout(att_row)
-        root.addWidget(attachments_group, 1)
+        attachments_panel.body_layout.addLayout(att_row)
+        self.attachments_stack = EmptyStateStack(
+            self.attachments,
+            "No attachments linked.",
+            "Add files or folders when a task needs supporting material.",
+        )
+        attachments_panel.body_layout.addWidget(self.attachments_stack, 1)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
 
         self.prev_parent_btn.clicked.connect(self.previousParentRequested.emit)
         self.next_parent_btn.clicked.connect(self.nextParentRequested.emit)
@@ -232,6 +267,12 @@ class TaskDetailsPanel(QWidget):
         self.next_child_btn.clicked.connect(self.nextChildRequested.emit)
         self.toggle_table_btn.clicked.connect(self.toggleTableRequested.emit)
         self.parent_jump.currentIndexChanged.connect(self._emit_parent_jump)
+
+    def sizeHint(self) -> QSize:
+        return QSize(520, 640)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(360, 460)
 
     def _wrap(self, layout):
         w = QWidget()
@@ -273,6 +314,11 @@ class TaskDetailsPanel(QWidget):
             self.waiting_for.setText("")
             self.depends_on.setText("")
             self.bucket.setCurrentText("inbox")
+            self.start_date.set_iso_date(None)
+            self.phase.blockSignals(True)
+            self.phase.clear()
+            self.phase.addItem("(none)", None)
+            self.phase.blockSignals(False)
             self.recurrence.setCurrentIndex(0)
             self.recurrence_next_on_done.setChecked(False)
             self.effort_minutes.setValue(-1)
@@ -280,6 +326,7 @@ class TaskDetailsPanel(QWidget):
             self.reminder_at.set_iso_datetime(None)
             self.reminder_before_minutes.setValue(0)
             self.attachments.clear()
+            self.attachments_stack.set_has_content(False)
             return
 
         progress = details.get("child_progress") or {}
@@ -355,6 +402,16 @@ class TaskDetailsPanel(QWidget):
             self.bucket.setCurrentText(bucket)
         else:
             self.bucket.setCurrentText("inbox")
+        self.start_date.set_iso_date(details.get("start_date"))
+
+        self.phase.blockSignals(True)
+        self.phase.clear()
+        self.phase.addItem("(none)", None)
+        for row in details.get("project_phases") or []:
+            self.phase.addItem(str(row.get("name") or ""), int(row.get("id")))
+        phase_idx = self.phase.findData(details.get("phase_id"))
+        self.phase.setCurrentIndex(phase_idx if phase_idx >= 0 else 0)
+        self.phase.blockSignals(False)
 
         self.waiting_for.setText(str(details.get("waiting_for") or ""))
 
@@ -388,6 +445,7 @@ class TaskDetailsPanel(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, int(att.get("id")))
             item.setData(Qt.ItemDataRole.UserRole + 1, path)
             self.attachments.addItem(item)
+        self.attachments_stack.set_has_content(self.attachments.count() > 0)
 
     def set_navigation_state(
         self,
@@ -464,6 +522,8 @@ class TaskDetailsPanel(QWidget):
             "notes": self.notes.toPlainText(),
             "tags": tags,
             "bucket": self.bucket.currentText().strip().lower(),
+            "start_date": self.start_date.iso_date(),
+            "phase_id": self.phase.currentData(),
             "waiting_for": self.waiting_for.text(),
             "dependencies": dep_ids,
             "recurrence": recurrence,

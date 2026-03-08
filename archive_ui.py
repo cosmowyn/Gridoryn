@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -16,8 +17,11 @@ from PySide6.QtWidgets import (
 
 from ui_layout import (
     DEFAULT_DIALOG_MARGINS,
+    EmptyStateStack,
+    SectionPanel,
     add_form_row,
     add_left_aligned_buttons,
+    configure_data_table,
     configure_box_layout,
     configure_form_layout,
 )
@@ -35,12 +39,12 @@ class ArchiveBrowserDialog(QDialog):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
 
-        intro = QLabel(
-            "Browse archived task roots and restore only the items you "
-            "want back in the active tree."
+        intro_panel = SectionPanel(
+            "Archive browser",
+            "Browse archived task roots and restore only the items you want "
+            "back in the active tree.",
         )
-        intro.setWordWrap(True)
-        root.addWidget(intro)
+        root.addWidget(intro_panel)
 
         top = QFormLayout()
         configure_form_layout(top, label_width=80)
@@ -48,7 +52,30 @@ class ArchiveBrowserDialog(QDialog):
         self.search.setPlaceholderText("Filter archived tasks by description/status/date/priority")
         self.search.setToolTip("Filter archive list by keyword.")
         add_form_row(top, "Search", self.search)
-        root.addLayout(top)
+        intro_panel.body_layout.addLayout(top)
+
+        table_panel = SectionPanel(
+            "Archived task roots",
+            "The table below stays attached to its restore action instead of "
+            "leaving buttons detached at the bottom of a blank dialog.",
+        )
+        root.addWidget(table_panel, 1)
+
+        toolbar = QHBoxLayout()
+        configure_box_layout(toolbar)
+        self.archive_meta = QLabel("0 archived roots")
+        toolbar.addWidget(self.archive_meta, 1)
+        self.restore_btn = QPushButton("Restore selected")
+        self.restore_btn.setToolTip("Restore selected archived task roots and their subtrees.")
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setToolTip("Close archive browser without restoring.")
+        add_left_aligned_buttons(
+            toolbar,
+            self.restore_btn,
+            self.cancel_btn,
+            trailing_stretch=False,
+        )
+        table_panel.body_layout.addLayout(toolbar)
 
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels([
@@ -62,22 +89,22 @@ class ArchiveBrowserDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table.setToolTip("Archived tasks. Select one or more rows to restore.")
+        configure_data_table(
+            self.table,
+            stretch_column=0,
+            resize_to_contents=[1, 2, 3, 4],
+            min_height=260,
+        )
         hdr = self.table.horizontalHeader()
-        hdr.setStretchLastSection(True)
         hdr.setSectionsMovable(True)
-        root.addWidget(self.table, 1)
-
-        btns = QHBoxLayout()
-        self.restore_btn = QPushButton("Restore selected")
-        self.restore_btn.setToolTip("Restore selected archived task roots and their subtrees.")
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.setToolTip("Close archive browser without restoring.")
-        add_left_aligned_buttons(btns, self.restore_btn, self.cancel_btn)
-        root.addLayout(btns)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.table_stack = EmptyStateStack(
+            self.table,
+            "No archived task roots match the current filter.",
+            "Adjust the filter or archive a task before restoring it.",
+        )
+        table_panel.body_layout.addWidget(self.table_stack, 1)
 
         self.search.textChanged.connect(self._rebuild)
         self.restore_btn.clicked.connect(self._accept_if_selection)
@@ -132,6 +159,8 @@ class ArchiveBrowserDialog(QDialog):
             )
 
         self.table.resizeColumnsToContents()
+        self.archive_meta.setText(f"{len(view_rows)} archived root item(s)")
+        self.table_stack.set_has_content(bool(view_rows))
         self.restore_btn.setEnabled(bool(view_rows))
 
     def _accept_if_selection(self):

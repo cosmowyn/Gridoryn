@@ -5,13 +5,14 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QComboBox,
     QColorDialog, QFontDialog, QFileDialog, QLineEdit,
-    QGroupBox, QFormLayout, QPlainTextEdit, QMessageBox,
+    QFormLayout, QPlainTextEdit, QMessageBox,
     QInputDialog, QScrollArea, QWidget, QCheckBox, QSpinBox, QGridLayout, QSizePolicy
 )
 
 from theme import ThemeManager, default_theme_dict
 from ui_layout import (
     DEFAULT_DIALOG_MARGINS,
+    SectionPanel,
     add_form_row,
     add_left_aligned_buttons,
     configure_box_layout,
@@ -55,6 +56,7 @@ class SettingsDialog(QDialog):
         self._theme: dict = self.tm.load_theme(self._theme_name)
 
         self._border_widgets: dict[str, dict[str, dict[str, object]]] = {}
+        self._section_columns: dict[str, QVBoxLayout] = {}
 
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=DEFAULT_DIALOG_MARGINS, spacing=10)
@@ -74,16 +76,23 @@ class SettingsDialog(QDialog):
         self.btn_save_as.clicked.connect(self._save_as_theme)
         self.btn_delete.clicked.connect(self._delete_theme)
 
-        theme_group = QGroupBox("Theme management")
-        theme_layout = QVBoxLayout(theme_group)
-        configure_box_layout(theme_layout)
+        theme_group = SectionPanel(
+            "Theme management",
+            "Select, create, save, and remove local appearance presets.",
+        )
         theme_form = QFormLayout()
         configure_form_layout(theme_form, label_width=140)
         add_form_row(theme_form, "Active theme", self.theme_combo)
-        theme_layout.addLayout(theme_form)
+        theme_group.body_layout.addLayout(theme_form)
         theme_actions = QHBoxLayout()
-        add_left_aligned_buttons(theme_actions, self.btn_new, self.btn_save, self.btn_save_as, self.btn_delete)
-        theme_layout.addLayout(theme_actions)
+        add_left_aligned_buttons(
+            theme_actions,
+            self.btn_new,
+            self.btn_save,
+            self.btn_save_as,
+            self.btn_delete,
+        )
+        theme_group.body_layout.addLayout(theme_actions)
         root.addWidget(theme_group)
 
         scroll = QScrollArea()
@@ -94,8 +103,20 @@ class SettingsDialog(QDialog):
 
         editor = QWidget()
         editor.setMinimumWidth(SETTINGS_EDITOR_MIN_WIDTH)
-        self.form_root = QVBoxLayout(editor)
-        configure_box_layout(self.form_root, margins=(0, 0, 0, 0), spacing=10)
+        editor_layout = QHBoxLayout(editor)
+        configure_box_layout(editor_layout, margins=(0, 0, 0, 0), spacing=10)
+
+        left_column = QVBoxLayout()
+        right_column = QVBoxLayout()
+        configure_box_layout(left_column, spacing=10)
+        configure_box_layout(right_column, spacing=10)
+        editor_layout.addLayout(left_column, 1)
+        editor_layout.addLayout(right_column, 1)
+
+        self._section_columns = {
+            "left": left_column,
+            "right": right_column,
+        }
         scroll.setWidget(editor)
 
         self._build_application_group()
@@ -113,6 +134,9 @@ class SettingsDialog(QDialog):
         self._build_border_groups()
         self._build_advanced_group()
 
+        left_column.addStretch(1)
+        right_column.addStretch(1)
+
         bottom = QHBoxLayout()
         ok = QPushButton("OK")
         cancel = QPushButton("Cancel")
@@ -123,13 +147,33 @@ class SettingsDialog(QDialog):
 
         self._load_theme_into_controls()
 
-    def _mk_group(self, title: str) -> QGroupBox:
-        g = QGroupBox(title)
+    def _add_section_widget(
+        self,
+        widget: QWidget,
+        column: str = "left",
+    ):
+        target = self._section_columns.get(column, self._section_columns["left"])
+        target.addWidget(widget)
+
+    def _mk_group(
+        self,
+        title: str,
+        *,
+        column: str = "left",
+        subtitle: str = "",
+    ) -> QWidget:
+        panel = SectionPanel(title, subtitle)
+        panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        g = QWidget()
         form = QFormLayout()
         configure_form_layout(form, label_width=190)
         form.setVerticalSpacing(12)
         g.setLayout(form)
-        self.form_root.addWidget(g)
+        panel.body_layout.addWidget(g)
+        self._add_section_widget(panel, column)
         return g
 
     def _wrap_row(self, lbl: QLabel, btn: QPushButton) -> QWidget:
@@ -147,7 +191,11 @@ class SettingsDialog(QDialog):
         return lbl, btn
 
     def _build_application_group(self):
-        g = self._mk_group("Application")
+        g = self._mk_group(
+            "Application",
+            column="left",
+            subtitle="Core application identity and icon settings.",
+        )
 
         row = QHBoxLayout()
         configure_box_layout(row)
@@ -162,7 +210,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("App icon", w)
 
     def _build_fonts_group(self):
-        g = self._mk_group("Fonts (separate per UI area)")
+        g = self._mk_group(
+            "Fonts",
+            column="left",
+            subtitle="Separate font choices for major parts of the interface.",
+        )
 
         self.font_base_lbl, self.font_base_btn = self._mk_font_row(self._choose_font_base)
         g.layout().addRow("Base", self._wrap_row(self.font_base_lbl, self.font_base_btn))
@@ -186,7 +238,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Search bar", self._wrap_row(self.font_search_lbl, self.font_search_btn))
 
     def _build_search_group(self):
-        g = self._mk_group("Search bar styling")
+        g = self._mk_group(
+            "Search bar styling",
+            column="left",
+            subtitle="Colors for the main search field and its clear button.",
+        )
 
         self.search_bg_btn = QPushButton()
         self.search_fg_btn = QPushButton()
@@ -225,7 +281,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Clear pressed background", self.search_clear_pressed_bg_btn)
 
     def _build_row_action_buttons_group(self):
-        g = self._mk_group("Row action buttons (+ / -)")
+        g = self._mk_group(
+            "Row action buttons (+ / -)",
+            column="right",
+            subtitle="Theme the floating row add and remove controls.",
+        )
 
         self.row_add_bg_btn = QPushButton()
         self.row_add_fg_btn = QPushButton()
@@ -264,7 +324,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Delete (–) pressed bg", self.row_del_pressed_bg_btn)
 
     def _build_window_group(self):
-        g = self._mk_group("Window & general colors")
+        g = self._mk_group(
+            "Window & general colors",
+            column="left",
+            subtitle="Base window background and foreground colors.",
+        )
         self.window_bg_btn = QPushButton()
         self.window_fg_btn = QPushButton()
         self.window_bg_btn.clicked.connect(lambda: self._color_pick("window_bg", self.window_bg_btn))
@@ -273,7 +337,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Text color", self.window_fg_btn)
 
     def _build_menus_toolbar_group(self):
-        g = self._mk_group("Menus & toolbar colors")
+        g = self._mk_group(
+            "Menus & toolbar colors",
+            column="right",
+            subtitle="Menu bar, menu, and toolbar appearance.",
+        )
         self.menubar_bg_btn = QPushButton()
         self.menu_bg_btn = QPushButton()
         self.menu_fg_btn = QPushButton()
@@ -296,7 +364,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Toolbar border", self.toolbar_border_btn)
 
     def _build_header_group(self):
-        g = self._mk_group("Header colors")
+        g = self._mk_group(
+            "Header colors",
+            column="left",
+            subtitle="Table and section header colors.",
+        )
         self.header_bg_btn = QPushButton()
         self.header_fg_btn = QPushButton()
         self.header_border_btn = QPushButton()
@@ -308,7 +380,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Header default border color", self.header_border_btn)
 
     def _build_tree_group(self):
-        g = self._mk_group("Tree/Table colors")
+        g = self._mk_group(
+            "Tree/Table colors",
+            column="right",
+            subtitle="Task tree background, text, and grid colors.",
+        )
         self.tree_bg_btn = QPushButton()
         self.tree_alt_bg_btn = QPushButton()
         self.tree_fg_btn = QPushButton()
@@ -325,7 +401,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Gridlines", self.grid_btn)
 
     def _build_buttons_group(self):
-        g = self._mk_group("Buttons colors")
+        g = self._mk_group(
+            "Buttons colors",
+            column="right",
+            subtitle="Primary button states across the application.",
+        )
         self.btn_bg_btn = QPushButton()
         self.btn_fg_btn = QPushButton()
         self.btn_border_btn = QPushButton()
@@ -351,7 +431,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Disabled text", self.btn_disabled_fg_btn)
 
     def _build_inputs_group(self):
-        g = self._mk_group("Inputs (editors) colors")
+        g = self._mk_group(
+            "Inputs (editors) colors",
+            column="left",
+            subtitle="Editor fields and focused input styling.",
+        )
         self.input_bg_btn = QPushButton()
         self.input_fg_btn = QPushButton()
         self.input_border_btn = QPushButton()
@@ -368,7 +452,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Focus border", self.input_focus_border_btn)
 
     def _build_clock_group(self):
-        g = self._mk_group("Clock widget colors")
+        g = self._mk_group(
+            "Clock widget colors",
+            column="right",
+            subtitle="Colors for the radial time picker widget.",
+        )
 
         self.clock_face_bg_btn = QPushButton()
         self.clock_face_border_btn = QPushButton()
@@ -398,7 +486,11 @@ class SettingsDialog(QDialog):
         g.layout().addRow("Center dot", self.clock_center_dot_btn)
 
     def _build_selection_group(self):
-        g = self._mk_group("Selection colors")
+        g = self._mk_group(
+            "Selection colors",
+            column="left",
+            subtitle="Highlight colors used for selected rows and text.",
+        )
         self.sel_bg_btn = QPushButton()
         self.sel_fg_btn = QPushButton()
         self.sel_bg_btn.clicked.connect(lambda: self._color_pick("sel_bg", self.sel_bg_btn))
@@ -412,7 +504,11 @@ class SettingsDialog(QDialog):
         self._build_border_group("Sibling borders", "siblings")
 
     def _build_border_group(self, title: str, section: str):
-        group = QGroupBox(title)
+        panel = SectionPanel(
+            title,
+            "Configure each side independently for precise divider styling.",
+        )
+        group = QWidget()
         layout = QGridLayout(group)
         configure_grid_layout(layout)
         layout.addWidget(QLabel("Side"), 0, 0)
@@ -455,10 +551,15 @@ class SettingsDialog(QDialog):
         layout.setColumnMinimumWidth(3, 130)
         layout.setColumnMinimumWidth(4, COLOR_BUTTON_MIN_WIDTH)
         layout.setColumnStretch(4, 1)
-        self.form_root.addWidget(group)
+        panel.body_layout.addWidget(group)
+        self._add_section_widget(panel, "right")
 
     def _build_advanced_group(self):
-        g = self._mk_group("Advanced")
+        g = self._mk_group(
+            "Advanced",
+            column="left",
+            subtitle="Optional custom Qt StyleSheet overrides.",
+        )
         self.custom_qss = QPlainTextEdit()
         self.custom_qss.setMinimumHeight(180)
         self.custom_qss.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
