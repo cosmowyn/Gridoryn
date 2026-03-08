@@ -54,7 +54,9 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><strong>Quick capture</strong> provides a lightweight capture window and tray/menu-bar entry for fast inbox capture without working directly in the main tree.</li>
             <li><strong>Search, filters, saved views, and perspectives</strong> let you move between planning contexts quickly.</li>
             <li><strong>Perspective buttons</strong> keep All, Today, Upcoming, Inbox, Someday, and Completed / Archive visible as first-class navigation targets.</li>
+            <li><strong>Capture and navigation controls</strong> live in their own dock, so quick add, search, perspective, and sort controls can be shown, hidden, floated, and rearranged separately from the main tree.</li>
             <li><strong>Details, calendar, review, undo history, and analytics docks</strong> add depth without replacing the main tree workflow.</li>
+            <li><strong>The task table can be hidden or floated</strong> from the View menu when you want to work only from the side panels or move the table to another monitor.</li>
             <li><strong>Focus mode</strong> provides a low-noise shortlist of overdue, today, and next-action work for the current session.</li>
             <li><strong>Quick Start</strong> offers first-run onboarding, sample data, and fast links into the guide and review workflow.</li>
             <li><strong>Calendar double-click entry</strong> lets you create a dated task directly from the calendar and jump straight into editing.</li>
@@ -96,6 +98,10 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><strong>Parent progress</strong> rolls child completion up as done/total and percentage.</li>
             <li>When a parent reaches <strong>100% child completion</strong>, it is automatically marked <strong>Done</strong>.</li>
             <li>Nested hierarchy depth is limited to <strong>10 levels</strong> per task chain to prevent runaway indentation.</li>
+            <li>The <strong>View &gt; Task table</strong> toggle hides the center tree while keeping the rest of the app active.</li>
+            <li>The <strong>View &gt; Capture/navigation panel</strong> toggle controls the dock that contains quick add, search, perspective, and sort controls.</li>
+            <li>The <strong>Details panel task browser</strong> lets you move to the previous/next parent, walk tasks inside the current parent, and jump directly to any visible top-level parent from a dropdown.</li>
+            <li><strong>View &gt; Float task table</strong> detaches the tree into a separate window and keeps the rest of the docks in the main workspace.</li>
         </ul>
         <p>If drag/drop or manual movement is unavailable, check whether a filter or non-manual sort mode is active.</p>
         """,

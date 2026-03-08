@@ -9,7 +9,7 @@ try:
 except Exception:
     pass
 
-from PySide6.QtCore import Qt, QTimer, QModelIndex, QEvent, QDateTime, QUrl
+from PySide6.QtCore import Qt, QTimer, QModelIndex, QEvent, QDateTime, QUrl, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -72,7 +72,24 @@ from workflow_assist import (
 
 from backup_io import export_backup_ui, import_backup_ui
 from theme_io import export_themes_ui, import_themes_ui
-from ui_layout import add_left_aligned_buttons, configure_box_layout, configure_grid_layout
+from ui_layout import configure_box_layout, configure_grid_layout
+
+
+class FloatingTaskTableWindow(QMainWindow):
+    dockRequested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._allow_close = False
+        self.setObjectName("FloatingTaskTableWindow")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+
+    def closeEvent(self, event):
+        if self._allow_close:
+            super().closeEvent(event)
+            return
+        self.dockRequested.emit()
+        event.ignore()
 
 
 class MainWindow(QMainWindow):
@@ -93,6 +110,15 @@ class MainWindow(QMainWindow):
         self.workspace_manager.ensure_workspace_state(self.workspace_id)
         self._workspace_switching = False
         self._replacement_window: MainWindow | None = None
+        self._floating_table_window: FloatingTaskTableWindow | None = None
+        self.setDockNestingEnabled(True)
+        self.setDockOptions(
+            self.dockOptions()
+            | QMainWindow.DockOption.AllowNestedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.GroupedDragging
+            | QMainWindow.DockOption.AnimatedDocks
+        )
 
         self.db = Database(self.workspace_db_path)
         self._update_window_title()
@@ -239,17 +265,10 @@ class MainWindow(QMainWindow):
         clear_btn.clicked.connect(lambda: self.search.setText(""))
         clear_btn.setMinimumHeight(control_h)
 
-        add_btn = QPushButton("Add task")
-        add_btn.clicked.connect(self._add_task_and_edit)
-        add_btn.setMinimumHeight(control_h)
-
         # Layout
-        main = QWidget()
-        v = QVBoxLayout(main)
-        configure_box_layout(v, margins=(8, 8, 8, 8), spacing=8)
-
-        top_controls = QGroupBox("Capture and navigation")
-        top_layout = QGridLayout(top_controls)
+        controls_panel = QWidget()
+        controls_panel.setObjectName("CaptureNavigationPanel")
+        top_layout = QGridLayout(controls_panel)
         configure_grid_layout(top_layout)
         quick_lbl = QLabel("Quick add")
         search_lbl = QLabel("Search")
@@ -276,14 +295,16 @@ class MainWindow(QMainWindow):
         top_layout.setColumnStretch(1, 1)
         top_layout.setColumnStretch(3, 0)
         top_layout.setColumnStretch(5, 0)
+        self.controls_panel = controls_panel
 
-        top_scroll = QScrollArea()
-        top_scroll.setWidgetResizable(True)
-        top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        top_scroll.setWidget(top_controls)
-        top_scroll.setMaximumHeight((control_h * 3) + 74)
-        v.addWidget(top_scroll, 0)
+        controls_scroll = QScrollArea()
+        controls_scroll.setObjectName("CaptureNavigationScroll")
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        controls_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        controls_scroll.setWidget(self.controls_panel)
+        controls_scroll.setMaximumHeight((control_h * 3) + 74)
+        self.controls_scroll = controls_scroll
 
         self._row_gutter = QWidget()
         self._row_gutter.setObjectName("RowActionGutter")
@@ -295,14 +316,24 @@ class MainWindow(QMainWindow):
         tree_row.addWidget(self._row_gutter)
         tree_row.addWidget(self.view, 1)
 
-        tree_wrap = QWidget()
-        tree_wrap.setLayout(tree_row)
-        v.addWidget(tree_wrap, 1)
+        self.tree_wrap = QWidget()
+        self.tree_wrap.setObjectName("TaskTableContainer")
+        self.tree_wrap.setLayout(tree_row)
 
-        h = QHBoxLayout()
-        add_left_aligned_buttons(h, add_btn)
-        v.addLayout(h)
-
+        main = QWidget()
+        main.setObjectName("MainTreeHost")
+        v = QVBoxLayout(main)
+        configure_box_layout(v, margins=(8, 8, 8, 8), spacing=8)
+        self._table_placeholder = QLabel(
+            "Task table is floating in a separate window.\nUse View > Float task table to dock it back."
+        )
+        self._table_placeholder.setObjectName("TaskTableFloatingPlaceholder")
+        self._table_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._table_placeholder.setWordWrap(True)
+        self._table_placeholder.hide()
+        v.addWidget(self._table_placeholder, 1)
+        v.addWidget(self.tree_wrap, 1)
+        self._table_host_layout = v
         self.setCentralWidget(main)
 
         # --- Row overlay buttons (+ / -) ---
@@ -327,6 +358,7 @@ class MainWindow(QMainWindow):
         self.view.viewport().installEventFilter(self)
         self.view.installEventFilter(self)
 
+        self._init_controls_dock()
         # Advanced filter panel (dock)
         self._init_filter_dock()
         self._init_details_dock()
@@ -355,15 +387,19 @@ class MainWindow(QMainWindow):
         self.model.modelReset.connect(self._refresh_analytics_panel)
         self.model.modelReset.connect(self._refresh_details_dock)
         self.model.modelReset.connect(self._refresh_relationships_panel)
+        self.model.modelReset.connect(self._refresh_task_browser)
         self.model.dataChanged.connect(lambda *_: self._refresh_calendar_markers())
         self.model.dataChanged.connect(lambda *_: self._refresh_focus_panel())
         self.model.dataChanged.connect(lambda *_: self._refresh_relationships_panel())
+        self.model.dataChanged.connect(lambda *_: self._refresh_task_browser())
         self.model.rowsInserted.connect(lambda *_: self._refresh_calendar_markers())
         self.model.rowsInserted.connect(lambda *_: self._refresh_focus_panel())
         self.model.rowsInserted.connect(lambda *_: self._refresh_relationships_panel())
+        self.model.rowsInserted.connect(lambda *_: self._refresh_task_browser())
         self.model.rowsRemoved.connect(lambda *_: self._refresh_calendar_markers())
         self.model.rowsRemoved.connect(lambda *_: self._refresh_focus_panel())
         self.model.rowsRemoved.connect(lambda *_: self._refresh_relationships_panel())
+        self.model.rowsRemoved.connect(lambda *_: self._refresh_task_browser())
         self.undo_stack.indexChanged.connect(self._on_undo_stack_index_changed)
 
         # Timer to refresh due-date gradient + foreground contrast
@@ -386,16 +422,17 @@ class MainWindow(QMainWindow):
         # Shortcut: focus search
         focus_search = QAction(self)
         focus_search.setShortcut(shortcut_sequence("Ctrl+F"))
-        focus_search.triggered.connect(lambda: self.search.setFocus())
+        focus_search.triggered.connect(self._focus_search_input)
         self.addAction(focus_search)
 
         focus_quick_add = QAction(self)
         focus_quick_add.setShortcut(shortcut_sequence("Ctrl+L"))
-        focus_quick_add.triggered.connect(lambda: self.quick_add.setFocus())
+        focus_quick_add.triggered.connect(self._focus_quick_add_input)
         self.addAction(focus_quick_add)
 
         QTimer.singleShot(0, self._update_row_action_buttons)
         QTimer.singleShot(0, self._refresh_details_dock)
+        QTimer.singleShot(0, self._refresh_task_browser)
         QTimer.singleShot(0, self._maybe_show_onboarding)
 
     # ---------- Splash (close again once UI shows) ----------
@@ -457,6 +494,10 @@ class MainWindow(QMainWindow):
         return max(18, min(28, h + 6))
 
     def _update_row_action_buttons(self):
+        if not getattr(self, "tree_wrap", None) or not self._is_task_table_visible():
+            self.row_add_btn.hide()
+            self.row_del_btn.hide()
+            return
         idx = self.view.currentIndex()
         if not idx.isValid():
             self.row_add_btn.hide()
@@ -862,12 +903,30 @@ class MainWindow(QMainWindow):
         self.filter_dock = QDockWidget("Filters", self)
         self.filter_dock.setObjectName("FiltersDock")
         self.filter_dock.setWidget(self._wrap_dock_content_scrollable(self.filter_panel, "FiltersDockScroll"))
-        self.filter_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self._configure_dock_widget(self.filter_dock)
 
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.filter_dock)
         self.filter_dock.hide()
         self.filter_dock.visibilityChanged.connect(
             lambda vis: self._toggle_filters_act.setChecked(bool(vis)) if hasattr(self, "_toggle_filters_act") else None
+        )
+
+    def _configure_dock_widget(self, dock: QDockWidget):
+        dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+
+    def _init_controls_dock(self):
+        self.controls_dock = QDockWidget("Capture and navigation", self)
+        self.controls_dock.setObjectName("CaptureNavigationDock")
+        self.controls_dock.setWidget(self.controls_scroll)
+        self._configure_dock_widget(self.controls_dock)
+        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.controls_dock)
+        self.controls_dock.visibilityChanged.connect(
+            lambda vis: self._toggle_controls_act.setChecked(bool(vis)) if hasattr(self, "_toggle_controls_act") else None
         )
 
     def _init_details_dock(self):
@@ -876,7 +935,7 @@ class MainWindow(QMainWindow):
         self.details_dock = QDockWidget("Details", self)
         self.details_dock.setObjectName("DetailsDock")
         self.details_dock.setWidget(self._wrap_dock_content_scrollable(self.details_panel, "DetailsDockScroll"))
-        self.details_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self._configure_dock_widget(self.details_dock)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.details_dock)
 
         self.details_panel.save_btn.clicked.connect(self._save_details_from_panel)
@@ -889,6 +948,12 @@ class MainWindow(QMainWindow):
         self.details_panel.add_folder_btn.clicked.connect(self._details_add_folder_attachment)
         self.details_panel.open_attachment_btn.clicked.connect(self._details_open_attachment)
         self.details_panel.remove_attachment_btn.clicked.connect(self._details_remove_attachment)
+        self.details_panel.previousParentRequested.connect(lambda: self._navigate_parent_relative(-1))
+        self.details_panel.nextParentRequested.connect(lambda: self._navigate_parent_relative(1))
+        self.details_panel.previousChildRequested.connect(lambda: self._navigate_child_relative(-1))
+        self.details_panel.nextChildRequested.connect(lambda: self._navigate_child_relative(1))
+        self.details_panel.parentJumpRequested.connect(self._focus_task_by_id)
+        self.details_panel.toggleTableRequested.connect(self._toggle_task_table_visibility)
 
         self.details_dock.visibilityChanged.connect(
             lambda vis: self._toggle_details_act.setChecked(bool(vis)) if hasattr(self, "_toggle_details_act") else None
@@ -904,9 +969,7 @@ class MainWindow(QMainWindow):
         self.relationships_dock.setWidget(
             self._wrap_dock_content_scrollable(self.relationships_panel, "RelationshipsDockScroll")
         )
-        self.relationships_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
-        )
+        self._configure_dock_widget(self.relationships_dock)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.relationships_dock)
         self.relationships_dock.hide()
         self.relationships_dock.visibilityChanged.connect(
@@ -926,7 +989,7 @@ class MainWindow(QMainWindow):
         self.undo_dock = QDockWidget("Undo History", self)
         self.undo_dock.setObjectName("UndoHistoryDock")
         self.undo_dock.setWidget(self.undo_view)
-        self.undo_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self._configure_dock_widget(self.undo_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.undo_dock)
         self.undo_dock.hide()
         self.undo_dock.visibilityChanged.connect(
@@ -945,7 +1008,7 @@ class MainWindow(QMainWindow):
         self.focus_dock = QDockWidget("Focus Mode", self)
         self.focus_dock.setObjectName("FocusDock")
         self.focus_dock.setWidget(self._wrap_dock_content_scrollable(self.focus_panel, "FocusDockScroll"))
-        self.focus_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self._configure_dock_widget(self.focus_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.focus_dock)
         self.focus_dock.hide()
         self.focus_dock.visibilityChanged.connect(
@@ -967,7 +1030,7 @@ class MainWindow(QMainWindow):
         self.review_dock = QDockWidget("Review Workflow", self)
         self.review_dock.setObjectName("ReviewDock")
         self.review_dock.setWidget(self._wrap_dock_content_scrollable(self.review_panel, "ReviewDockScroll"))
-        self.review_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self._configure_dock_widget(self.review_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.review_dock)
         self.review_dock.hide()
         self.review_dock.visibilityChanged.connect(
@@ -982,7 +1045,7 @@ class MainWindow(QMainWindow):
         self.analytics_dock = QDockWidget("Analytics", self)
         self.analytics_dock.setObjectName("AnalyticsDock")
         self.analytics_dock.setWidget(self._wrap_dock_content_scrollable(self.analytics_panel, "AnalyticsDockScroll"))
-        self.analytics_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self._configure_dock_widget(self.analytics_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.analytics_dock)
         self.analytics_dock.hide()
         self.analytics_dock.visibilityChanged.connect(
@@ -1021,7 +1084,7 @@ class MainWindow(QMainWindow):
         self.calendar_dock = QDockWidget("Calendar / Agenda", self)
         self.calendar_dock.setObjectName("CalendarDock")
         self.calendar_dock.setWidget(self._wrap_dock_content_scrollable(wrap, "CalendarDockScroll"))
-        self.calendar_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self._configure_dock_widget(self.calendar_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.calendar_dock)
         self.calendar_dock.hide()
         self.calendar_dock.visibilityChanged.connect(
@@ -1048,13 +1111,298 @@ class MainWindow(QMainWindow):
         scroll.setWidget(content)
         return scroll
 
+    def _task_id_for_proxy_index(self, pidx: QModelIndex) -> int | None:
+        if not pidx.isValid():
+            return None
+        src = self.proxy.mapToSource(pidx)
+        tid = self.model.task_id_from_index(src)
+        return int(tid) if tid is not None else None
+
+    def _top_level_proxy_indexes(self) -> list[QModelIndex]:
+        rows: list[QModelIndex] = []
+        root = QModelIndex()
+        for row in range(self.proxy.rowCount(root)):
+            idx = self.proxy.index(row, 0, root)
+            if idx.isValid():
+                rows.append(idx)
+        return rows
+
+    def _iter_proxy_subtree_indexes(self, parent: QModelIndex) -> list[QModelIndex]:
+        rows: list[QModelIndex] = []
+        if not parent.isValid():
+            return rows
+        rows.append(parent)
+        for row in range(self.proxy.rowCount(parent)):
+            child = self.proxy.index(row, 0, parent)
+            if not child.isValid():
+                continue
+            rows.extend(self._iter_proxy_subtree_indexes(child))
+        return rows
+
+    def _top_level_task_id_for_task(self, task_id: int | None) -> int | None:
+        if task_id is None:
+            return None
+        node = self.model.node_for_id(int(task_id))
+        if not node or not node.task:
+            return None
+        while node.parent is not None and node.parent.task is not None:
+            node = node.parent
+        try:
+            return int(node.task["id"]) if node.task else None
+        except Exception:
+            return None
+
+    def _expand_proxy_ancestors(self, pidx: QModelIndex):
+        chain: list[QModelIndex] = []
+        probe = pidx.parent()
+        while probe.isValid():
+            chain.append(probe)
+            probe = probe.parent()
+        for ancestor in reversed(chain):
+            self.view.expand(ancestor)
+
+    def _collect_task_browser_state(self) -> dict:
+        parents: list[tuple[int, str]] = []
+        parent_ids: list[int] = []
+        for idx in self._top_level_proxy_indexes():
+            tid = self._task_id_for_proxy_index(idx)
+            if tid is None:
+                continue
+            label = str(self.proxy.data(idx, Qt.ItemDataRole.DisplayRole) or "").strip() or f"Task {tid}"
+            parents.append((int(tid), label))
+            parent_ids.append(int(tid))
+
+        current_task_id = self._selected_task_id()
+        current_parent_id = self._top_level_task_id_for_task(current_task_id)
+        if current_parent_id is None and parent_ids:
+            current_parent_id = int(parent_ids[0])
+
+        current_parent_position = 0
+        current_parent_total = len(parent_ids)
+        subtree_ids: list[int] = []
+        current_item_position = 0
+        current_item_total = 0
+
+        if current_parent_id is not None and current_parent_id in parent_ids:
+            current_parent_position = parent_ids.index(int(current_parent_id)) + 1
+            src = self._source_index_for_task_id(int(current_parent_id), 0)
+            if src.isValid():
+                root_proxy = self.proxy.mapFromSource(src)
+                if root_proxy.isValid():
+                    subtree_ids = [
+                        tid
+                        for tid in (self._task_id_for_proxy_index(idx) for idx in self._iter_proxy_subtree_indexes(root_proxy))
+                        if tid is not None
+                    ]
+                    current_item_total = len(subtree_ids)
+                    if current_task_id is not None and int(current_task_id) in subtree_ids:
+                        current_item_position = subtree_ids.index(int(current_task_id)) + 1
+
+        return {
+            "parents": parents,
+            "parent_ids": parent_ids,
+            "current_parent_id": current_parent_id,
+            "current_parent_position": current_parent_position,
+            "current_parent_total": current_parent_total,
+            "subtree_ids": subtree_ids,
+            "current_item_position": current_item_position,
+            "current_item_total": current_item_total,
+            "tree_visible": self._is_task_table_visible(),
+        }
+
+    def _refresh_task_browser(self):
+        if not hasattr(self, "details_panel"):
+            return
+        state = self._collect_task_browser_state()
+        self.details_panel.set_navigation_state(
+            parents=list(state.get("parents") or []),
+            current_parent_id=state.get("current_parent_id"),
+            current_parent_position=int(state.get("current_parent_position") or 0),
+            current_parent_total=int(state.get("current_parent_total") or 0),
+            current_item_position=int(state.get("current_item_position") or 0),
+            current_item_total=int(state.get("current_item_total") or 0),
+            can_prev_parent=int(state.get("current_parent_position") or 0) > 1,
+            can_next_parent=0 < int(state.get("current_parent_position") or 0) < int(state.get("current_parent_total") or 0),
+            can_prev_child=int(state.get("current_item_position") or 0) > 1,
+            can_next_child=0 < int(state.get("current_item_position") or 0) < int(state.get("current_item_total") or 0),
+            tree_visible=bool(state.get("tree_visible")),
+        )
+
+    def _is_task_table_floating(self) -> bool:
+        return bool(self._floating_table_window is not None and self._floating_table_window.centralWidget() is self.tree_wrap)
+
+    def _is_task_table_visible(self) -> bool:
+        if self._is_task_table_floating():
+            return bool(self._floating_table_window is not None and self._floating_table_window.isVisible())
+        return bool(getattr(self, "tree_wrap", None) and not self.tree_wrap.isHidden())
+
+    def _ensure_floating_table_window(self) -> FloatingTaskTableWindow:
+        if self._floating_table_window is None:
+            win = FloatingTaskTableWindow(self)
+            win.setWindowTitle(f"{APP_NAME} - Task table")
+            icon = self.windowIcon()
+            if icon is not None:
+                win.setWindowIcon(icon)
+            win.dockRequested.connect(lambda: self._set_task_table_floating(False))
+            self._floating_table_window = win
+        return self._floating_table_window
+
+    def _update_task_table_placeholder(self):
+        if not hasattr(self, "_table_placeholder"):
+            return
+        floating = self._is_task_table_floating()
+        self._table_placeholder.setVisible(bool(floating))
+        if floating:
+            self._table_placeholder.setText(
+                "Task table is floating in a separate window.\n"
+                "Use View > Float task table to dock it back."
+            )
+            self._table_placeholder.show()
+        elif not self._is_task_table_visible():
+            self._table_placeholder.setText(
+                "Task table is hidden.\nUse View > Task table to show it again."
+            )
+            self._table_placeholder.show()
+        else:
+            self._table_placeholder.hide()
+
+    def _set_task_table_floating(self, floating: bool, *, show_after: bool | None = None):
+        want_floating = bool(floating)
+        currently_floating = self._is_task_table_floating()
+        if want_floating == currently_floating:
+            if show_after is not None:
+                self._set_tree_visible(bool(show_after), show_message=False)
+            return
+
+        if want_floating:
+            win = self._ensure_floating_table_window()
+            self.tree_wrap.setParent(None)
+            win.setCentralWidget(self.tree_wrap)
+            if show_after is None:
+                show_after = True
+            if show_after:
+                win.show()
+                win.raise_()
+                win.activateWindow()
+            else:
+                win.hide()
+        else:
+            visible_before = self._is_task_table_visible()
+            win = self._ensure_floating_table_window()
+            widget = win.takeCentralWidget()
+            if widget is not None and widget is self.tree_wrap:
+                self._table_host_layout.addWidget(self.tree_wrap, 1)
+            win.hide()
+            if show_after is None:
+                show_after = visible_before
+            self.tree_wrap.setHidden(not bool(show_after))
+
+        if hasattr(self, "_float_table_act"):
+            blocked = self._float_table_act.blockSignals(True)
+            self._float_table_act.setChecked(want_floating)
+            self._float_table_act.blockSignals(blocked)
+        if show_after is not None and not want_floating:
+            self.tree_wrap.setHidden(not bool(show_after))
+        self.row_add_btn.hide()
+        self.row_del_btn.hide()
+        self._update_task_table_placeholder()
+        self.model.settings.setValue("ui/tree_floating", want_floating)
+        self._refresh_task_browser()
+        QTimer.singleShot(0, self._update_row_action_buttons)
+
+    def _show_controls_dock(self):
+        if hasattr(self, "controls_dock"):
+            self.controls_dock.show()
+            if hasattr(self, "_toggle_controls_act"):
+                self._toggle_controls_act.setChecked(True)
+
+    def _focus_search_input(self):
+        self._show_controls_dock()
+        self.search.setFocus()
+        self.search.selectAll()
+
+    def _focus_quick_add_input(self):
+        self._show_controls_dock()
+        self.quick_add.setFocus()
+        self.quick_add.selectAll()
+
+    def _navigate_parent_relative(self, delta: int):
+        state = self._collect_task_browser_state()
+        parent_ids = [int(tid) for tid in (state.get("parent_ids") or [])]
+        if not parent_ids:
+            return
+        current_parent_id = state.get("current_parent_id")
+        try:
+            index = parent_ids.index(int(current_parent_id))
+        except Exception:
+            index = 0 if int(delta) >= 0 else len(parent_ids) - 1
+        new_index = index + int(delta)
+        if 0 <= new_index < len(parent_ids):
+            self._focus_task_by_id(int(parent_ids[new_index]))
+
+    def _navigate_child_relative(self, delta: int):
+        state = self._collect_task_browser_state()
+        subtree_ids = [int(tid) for tid in (state.get("subtree_ids") or [])]
+        if not subtree_ids:
+            return
+        current_task_id = self._selected_task_id()
+        if current_task_id is None or int(current_task_id) not in subtree_ids:
+            target_index = 0 if int(delta) >= 0 else len(subtree_ids) - 1
+            self._focus_task_by_id(int(subtree_ids[target_index]))
+            return
+        current_index = subtree_ids.index(int(current_task_id))
+        new_index = current_index + int(delta)
+        if 0 <= new_index < len(subtree_ids):
+            self._focus_task_by_id(int(subtree_ids[new_index]))
+
+    def _set_tree_visible(self, visible: bool, *, show_message: bool = True):
+        if not hasattr(self, "tree_wrap"):
+            return
+        show_tree = bool(visible)
+        if self._is_task_table_floating():
+            win = self._ensure_floating_table_window()
+            if show_tree:
+                win.show()
+                win.raise_()
+                win.activateWindow()
+            else:
+                win.hide()
+        else:
+            self.tree_wrap.setHidden(not show_tree)
+        self.row_add_btn.hide()
+        self.row_del_btn.hide()
+        if hasattr(self, "_toggle_table_act"):
+            blocked = self._toggle_table_act.blockSignals(True)
+            self._toggle_table_act.setChecked(show_tree)
+            self._toggle_table_act.blockSignals(blocked)
+        if not show_tree and hasattr(self, "details_dock") and not self.details_dock.isVisible():
+            self.details_dock.show()
+            if hasattr(self, "_toggle_details_act"):
+                self._toggle_details_act.setChecked(True)
+        if show_message:
+            if show_tree:
+                self.statusBar().showMessage("Task table shown.", 2500)
+            else:
+                self.statusBar().showMessage(
+                    "Task table hidden. Use the Details browser or other docks to keep navigating tasks.",
+                    4000,
+                )
+        self.model.settings.setValue("ui/tree_visible", show_tree)
+        self._refresh_task_browser()
+        QTimer.singleShot(0, self._update_row_action_buttons)
+
+    def _toggle_task_table_visibility(self):
+        visible = self._is_task_table_visible()
+        self._set_tree_visible(not visible)
+
     def _refresh_details_dock(self):
         tid = self._selected_task_id()
         if tid is None:
             self.details_panel.set_task_details(None)
-            return
-        details = self.model.task_details(int(tid))
-        self.details_panel.set_task_details(details)
+        else:
+            details = self.model.task_details(int(tid))
+            self.details_panel.set_task_details(details)
+        self._refresh_task_browser()
 
     def _refresh_relationships_panel(self):
         if not hasattr(self, "relationships_panel"):
@@ -1259,6 +1607,7 @@ class MainWindow(QMainWindow):
             pidx = self.proxy.mapFromSource(src)
         if not pidx.isValid():
             return False
+        self._expand_proxy_ancestors(pidx)
         self.view.setCurrentIndex(pidx)
         self.view.scrollTo(pidx)
         QTimer.singleShot(0, self._edit_current_cell)
@@ -1483,6 +1832,7 @@ class MainWindow(QMainWindow):
     def _on_search_changed(self, text: str):
         self.proxy.set_search_text(text)
         self._update_dragdrop_mode()
+        self._refresh_task_browser()
         QTimer.singleShot(0, self._update_row_action_buttons)
 
     def _apply_filters(self):
@@ -1501,6 +1851,7 @@ class MainWindow(QMainWindow):
         self.proxy.set_tag_filter(self.filter_panel.tag_filter())
 
         self._update_dragdrop_mode()
+        self._refresh_task_browser()
         QTimer.singleShot(0, self._update_row_action_buttons)
 
     def _update_dragdrop_mode(self):
@@ -1717,6 +2068,11 @@ class MainWindow(QMainWindow):
         s.setValue("ui/geometry", self.saveGeometry())
         s.setValue("ui/window_state", self.saveState())
         s.setValue("ui/header_state", self.view.header().saveState())
+        s.setValue("ui/controls_dock_visible", self.controls_dock.isVisible())
+        s.setValue("ui/tree_visible", self._is_task_table_visible())
+        s.setValue("ui/tree_floating", self._is_task_table_floating())
+        if self._floating_table_window is not None:
+            s.setValue("ui/tree_float_geometry", self._floating_table_window.saveGeometry())
         s.setValue("ui/filters_dock_visible", self.filter_dock.isVisible())
         s.setValue("ui/details_dock_visible", self.details_dock.isVisible())
         s.setValue("ui/relationships_dock_visible", self.relationships_dock.isVisible())
@@ -1925,6 +2281,27 @@ class MainWindow(QMainWindow):
             PaletteCommand("task.archive", "Archive task", "Archive selected task(s)", ("delete", "hide"), self._archive_selected),
             PaletteCommand("task.delete", "Delete permanently", "Permanently delete selected task(s)", ("remove", "hard delete"), self._delete_selected_permanently),
             PaletteCommand("ui.open_details", "Open details panel", "Show and focus details panel", ("notes", "details"), self._show_details_and_focus),
+            PaletteCommand(
+                "ui.open_capture_navigation",
+                "Open capture/navigation panel",
+                "Show the dock that contains quick add, search, sort, and perspective controls",
+                ("controls", "search", "quick add", "navigation"),
+                self._show_controls_dock,
+            ),
+            PaletteCommand(
+                "ui.toggle_table",
+                "Toggle task table",
+                "Show or hide the main task table while keeping dock panels active",
+                ("table", "tree", "center"),
+                self._toggle_task_table_visibility,
+            ),
+            PaletteCommand(
+                "ui.float_table",
+                "Float task table",
+                "Detach or redock the main task table window",
+                ("table", "float", "detach", "monitor"),
+                lambda: self._set_task_table_floating(not self._is_task_table_floating()),
+            ),
             PaletteCommand("task.set_priority", "Change priority", "Set priority on selected task(s)", ("p1", "p2", "p3"), self._set_priority_for_selected_prompt),
             PaletteCommand("task.set_status", "Change status", "Set status on selected task(s)", ("todo", "done", "blocked"), self._set_status_for_selected_prompt),
             PaletteCommand(
@@ -2011,8 +2388,8 @@ class MainWindow(QMainWindow):
                 ("help", "keyboard", "shortcuts"),
                 lambda: self._open_help_anchor("shortcuts"),
             ),
-            PaletteCommand("ui.focus_search", "Focus search", "Move cursor to search box", ("search", "find"), lambda: self.search.setFocus()),
-            PaletteCommand("ui.focus_quick_add", "Focus quick add", "Move cursor to quick-add input", ("quick add", "capture"), lambda: self.quick_add.setFocus()),
+            PaletteCommand("ui.focus_search", "Focus search", "Move cursor to search box", ("search", "find"), self._focus_search_input),
+            PaletteCommand("ui.focus_quick_add", "Focus quick add", "Move cursor to quick-add input", ("quick add", "capture"), self._focus_quick_add_input),
             PaletteCommand("backup.export_data", "Export backup data", "Open data export dialog", ("backup", "export"), self._export_backup_data),
             PaletteCommand("backup.import_data", "Import backup data", "Open data import dialog", ("backup", "import"), self._import_backup_data),
             PaletteCommand("theme.export", "Export themes", "Open theme export dialog", ("theme", "export"), self._export_themes),
@@ -2194,13 +2571,14 @@ class MainWindow(QMainWindow):
                 self.search,
                 f"Search tasks with free text and operators like status:, due<=, tag:, has:. Focus shortcut: {shortcut_display_text('Ctrl+F')}.",
             ),
+            (self.controls_panel, "Capture and navigation controls for quick add, search, perspective changes, and sort mode."),
             (self.view_mode, "Choose a built-in perspective: All, Today, Upcoming, Inbox, Someday, Completed/Archive."),
             (self.sort_mode, "Choose how tasks are sorted in the current view."),
             (self.view, "Main task tree. Select rows, edit cells, and organize hierarchy."),
             (self.row_add_btn, "Add child task to the focused row."),
             (self.row_del_btn, "Archive focused row."),
             (self.filter_panel, "Advanced filtering controls."),
-            (self.details_panel, "Task details editor for notes, tags, recurrence, reminders, and attachments."),
+            (self.details_panel, "Task details editor with side-panel browsing, notes, tags, recurrence, reminders, and attachments."),
             (self.relationships_panel, "Relationship inspector for dependencies, same-tag tasks, same-project tasks, and project health context."),
             (self.undo_view, "Undo history list. Click an entry to inspect/step through history."),
             (self.calendar, "Calendar navigator for due-date agenda."),
@@ -2280,6 +2658,8 @@ class MainWindow(QMainWindow):
 
     def _update_window_title(self):
         self.setWindowTitle(f"{APP_NAME} - {self.workspace_name}")
+        if self._floating_table_window is not None:
+            self._floating_table_window.setWindowTitle(f"{APP_NAME} - {self.workspace_name} - Task table")
 
     def _init_status_bar(self):
         self._version_label = QLabel(app_display_version(), self)
@@ -2301,11 +2681,12 @@ class MainWindow(QMainWindow):
         named_widgets: list[tuple[QWidget, str, str]] = [
             (self.quick_add, "Quick add input", "Enter a task or planning command with optional tags, bucket directives, due dates, and priority."),
             (self.search, "Task search input", "Search tasks with free text and structured operators."),
+            (self.controls_panel, "Capture and navigation panel", "Dockable panel with quick add, search, perspectives, and sort controls."),
             (self.view, "Task tree", "Primary tree view for tasks, hierarchy, and inline editing."),
             (self.view_mode, "Perspective selector", "Switch between All, Today, Upcoming, Inbox, Someday, and Completed."),
             (self.sort_mode, "Sort mode selector", "Choose the current task sorting mode."),
             (self.filter_panel, "Filters panel", "Advanced filtering options for the task tree."),
-            (self.details_panel, "Task details panel", "Edit notes, tags, recurrence, reminders, and attachments."),
+            (self.details_panel, "Task details panel", "Browse tasks from the side panel and edit notes, tags, recurrence, reminders, and attachments."),
             (self.relationships_panel, "Relationship inspector", "Inspect dependencies, related tasks, and project context for the selected task."),
             (self.review_panel, "Review workflow panel", "Guided weekly review tabs with direct task actions."),
             (self.focus_panel, "Focus mode panel", "Short actionable list for focused work sessions."),
@@ -2532,10 +2913,25 @@ class MainWindow(QMainWindow):
         settings_act = QAction("Settings & Themes…", self)
         settings_act.triggered.connect(self._open_settings)
 
+        toggle_controls_act = QAction("Capture/navigation panel", self)
+        toggle_controls_act.setCheckable(True)
+        toggle_controls_act.setChecked(True)
+        toggle_controls_act.triggered.connect(lambda checked: self.controls_dock.setVisible(bool(checked)))
+
         toggle_filters_act = QAction("Filters panel", self)
         toggle_filters_act.setCheckable(True)
         toggle_filters_act.setChecked(False)
         toggle_filters_act.triggered.connect(self._toggle_filters_dock)
+
+        toggle_table_act = QAction("Task table", self)
+        toggle_table_act.setCheckable(True)
+        toggle_table_act.setChecked(True)
+        toggle_table_act.triggered.connect(self._set_tree_visible)
+
+        float_table_act = QAction("Float task table", self)
+        float_table_act.setCheckable(True)
+        float_table_act.setChecked(False)
+        float_table_act.triggered.connect(self._set_task_table_floating)
 
         toggle_details_act = QAction("Details panel", self)
         toggle_details_act.setCheckable(True)
@@ -2750,6 +3146,9 @@ class MainWindow(QMainWindow):
         m_edit.addAction(move_down_act)
 
         m_view = menubar.addMenu("View")
+        m_view.addAction(toggle_controls_act)
+        m_view.addAction(toggle_table_act)
+        m_view.addAction(float_table_act)
         m_view.addAction(toggle_filters_act)
         m_view.addAction(toggle_details_act)
         m_view.addAction(toggle_relationships_act)
@@ -2841,7 +3240,10 @@ class MainWindow(QMainWindow):
         tb.addAction(undo_act)
         tb.addAction(redo_act)
 
+        self._toggle_controls_act = toggle_controls_act
         self._toggle_filters_act = toggle_filters_act
+        self._toggle_table_act = toggle_table_act
+        self._float_table_act = float_table_act
         self._toggle_details_act = toggle_details_act
         self._toggle_relationships_act = toggle_relationships_act
         self._toggle_undo_history_act = toggle_undo_history_act
@@ -2904,6 +3306,9 @@ class MainWindow(QMainWindow):
             (duplicate_act, "Duplicate the selected task."),
             (duplicate_tree_act, "Duplicate selected task with all descendants."),
             (bulk_edit_act, "Apply one operation to multiple selected tasks."),
+            (toggle_controls_act, "Show or hide the capture/navigation controls dock."),
+            (toggle_table_act, "Show or hide the main task table while keeping the other panels active."),
+            (float_table_act, "Detach the task table into its own window so it can live on another monitor."),
             (toggle_filters_act, "Show or hide the Filters dock."),
             (toggle_details_act, "Show or hide the Details dock."),
             (toggle_relationships_act, "Show or hide the relationship inspector for dependencies, related tasks, and project context."),
@@ -3247,6 +3652,7 @@ class MainWindow(QMainWindow):
         self._sync_perspective_buttons(key)
         self.model.settings.setValue("ui/perspective", key)
         self._update_dragdrop_mode()
+        self._refresh_task_browser()
         self._refresh_calendar_list()
         QTimer.singleShot(0, self._update_row_action_buttons)
 
@@ -3269,6 +3675,7 @@ class MainWindow(QMainWindow):
         self.proxy.set_sort_mode(key)
         self.model.settings.setValue("ui/sort_mode", key)
         self._update_dragdrop_mode()
+        self._refresh_task_browser()
         QTimer.singleShot(0, self._update_row_action_buttons)
 
     def _source_index_for_task_id(self, task_id: int, column: int = 0):
@@ -3293,6 +3700,7 @@ class MainWindow(QMainWindow):
         pidx = self.proxy.mapFromSource(src)
         if not pidx.isValid():
             return
+        self._expand_proxy_ancestors(pidx)
         self.view.setCurrentIndex(pidx)
         self.view.scrollTo(pidx)
 
@@ -3492,6 +3900,8 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(icon)
             if self._tray_icon is not None:
                 self._tray_icon.setIcon(icon)
+            if self._floating_table_window is not None:
+                self._floating_table_window.setWindowIcon(icon)
         self.model.refresh_due_highlights()
 
     def _open_settings(self):
@@ -3619,6 +4029,24 @@ class MainWindow(QMainWindow):
             hidden = s.value(f"columns/hidden/{key}", False, type=bool)
             self.view.setColumnHidden(logical, bool(hidden))
 
+        controls_visible = s.value("ui/controls_dock_visible", True, type=bool)
+        self.controls_dock.setVisible(bool(controls_visible))
+        if hasattr(self, "_toggle_controls_act"):
+            self._toggle_controls_act.setChecked(bool(controls_visible))
+
+        tree_floating = s.value("ui/tree_floating", False, type=bool)
+        self._set_task_table_floating(bool(tree_floating), show_after=False)
+        if bool(tree_floating):
+            float_geo = s.value("ui/tree_float_geometry")
+            if float_geo is not None and self._floating_table_window is not None:
+                try:
+                    self._floating_table_window.restoreGeometry(float_geo)
+                except Exception:
+                    pass
+
+        tree_visible = s.value("ui/tree_visible", True, type=bool)
+        self._set_tree_visible(bool(tree_visible), show_message=False)
+
         dock_visible = s.value("ui/filters_dock_visible", False, type=bool)
         self.filter_dock.setVisible(bool(dock_visible))
         self._toggle_filters_act.setChecked(bool(dock_visible))
@@ -3700,16 +4128,19 @@ class MainWindow(QMainWindow):
                 pass
         if self._tray_icon is not None:
             self._tray_icon.hide()
+        if self._floating_table_window is not None:
+            self._floating_table_window._allow_close = True
+            self._floating_table_window.close()
         super().closeEvent(event)
 
 
 def main():
     try:
+        log_event("Application startup requested", context="startup.begin", db_path=app_db_path())
         app = QApplication(sys.argv)
         app.setOrganizationName(APP_ORGANIZATION)
         app.setApplicationName(APP_NAME)
         app.setApplicationVersion(APP_VERSION)
-        log_event("Application startup requested", context="startup.begin", db_path=app_db_path())
 
         workspace_manager = WorkspaceProfileManager()
         current_workspace = workspace_manager.current_workspace()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -32,6 +32,13 @@ def _safe_int(value, default=0):
 
 
 class TaskDetailsPanel(QWidget):
+    previousParentRequested = Signal()
+    nextParentRequested = Signal()
+    previousChildRequested = Signal()
+    nextChildRequested = Signal()
+    parentJumpRequested = Signal(int)
+    toggleTableRequested = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -39,6 +46,46 @@ class TaskDetailsPanel(QWidget):
 
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(8, 8, 8, 8), spacing=10)
+
+        browser_group = QGroupBox("Task browser")
+        browser_layout = QVBoxLayout(browser_group)
+        configure_box_layout(browser_layout)
+
+        self.browser_summary = QLabel("No visible tasks in the current view.")
+        self.browser_summary.setWordWrap(True)
+        self.browser_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.browser_summary.setToolTip("Browse tasks even when the main table is hidden.")
+        browser_layout.addWidget(self.browser_summary)
+
+        browser_grid = QGridLayout()
+        configure_grid_layout(browser_grid)
+
+        self.parent_jump = QComboBox()
+        self.parent_jump.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.parent_jump.setMinimumContentsLength(18)
+        self.parent_jump.setToolTip("Jump directly to a visible top-level parent task.")
+
+        self.prev_parent_btn = QPushButton("Prev parent")
+        self.prev_parent_btn.setToolTip("Jump to the previous visible top-level parent task.")
+        self.next_parent_btn = QPushButton("Next parent")
+        self.next_parent_btn.setToolTip("Jump to the next visible top-level parent task.")
+        self.prev_child_btn = QPushButton("Prev child")
+        self.prev_child_btn.setToolTip("Jump to the previous task inside the current parent/project.")
+        self.next_child_btn = QPushButton("Next child")
+        self.next_child_btn.setToolTip("Jump to the next task inside the current parent/project.")
+        self.toggle_table_btn = QPushButton("Hide table")
+        self.toggle_table_btn.setToolTip("Show or hide the main task table while keeping the side panels active.")
+
+        browser_grid.addWidget(QLabel("Jump parent"), 0, 0)
+        browser_grid.addWidget(self.parent_jump, 0, 1, 1, 3)
+        browser_grid.addWidget(self.prev_parent_btn, 1, 0)
+        browser_grid.addWidget(self.next_parent_btn, 1, 1)
+        browser_grid.addWidget(self.prev_child_btn, 1, 2)
+        browser_grid.addWidget(self.next_child_btn, 1, 3)
+        browser_grid.addWidget(self.toggle_table_btn, 2, 0, 1, 2)
+        browser_grid.setColumnStretch(4, 1)
+        browser_layout.addLayout(browser_grid)
+        root.addWidget(browser_group)
 
         self.meta = QLabel("No task selected")
         self.meta.setWordWrap(True)
@@ -179,6 +226,13 @@ class TaskDetailsPanel(QWidget):
         attachments_layout.addLayout(att_row)
         root.addWidget(attachments_group, 1)
 
+        self.prev_parent_btn.clicked.connect(self.previousParentRequested.emit)
+        self.next_parent_btn.clicked.connect(self.nextParentRequested.emit)
+        self.prev_child_btn.clicked.connect(self.previousChildRequested.emit)
+        self.next_child_btn.clicked.connect(self.nextChildRequested.emit)
+        self.toggle_table_btn.clicked.connect(self.toggleTableRequested.emit)
+        self.parent_jump.currentIndexChanged.connect(self._emit_parent_jump)
+
     def _wrap(self, layout):
         w = QWidget()
         w.setLayout(layout)
@@ -186,6 +240,16 @@ class TaskDetailsPanel(QWidget):
 
     def task_id(self) -> int | None:
         return self._task_id
+
+    def _emit_parent_jump(self, index: int):
+        if index < 0:
+            return
+        try:
+            task_id = int(self.parent_jump.itemData(index))
+        except Exception:
+            return
+        if task_id > 0:
+            self.parentJumpRequested.emit(task_id)
 
     def selected_attachment(self) -> tuple[int | None, str]:
         it = self.attachments.currentItem()
@@ -324,6 +388,53 @@ class TaskDetailsPanel(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, int(att.get("id")))
             item.setData(Qt.ItemDataRole.UserRole + 1, path)
             self.attachments.addItem(item)
+
+    def set_navigation_state(
+        self,
+        *,
+        parents: list[tuple[int, str]],
+        current_parent_id: int | None,
+        current_parent_position: int,
+        current_parent_total: int,
+        current_item_position: int,
+        current_item_total: int,
+        can_prev_parent: bool,
+        can_next_parent: bool,
+        can_prev_child: bool,
+        can_next_child: bool,
+        tree_visible: bool,
+    ):
+        self.parent_jump.blockSignals(True)
+        self.parent_jump.clear()
+        for task_id, label in parents:
+            self.parent_jump.addItem(str(label or f"Task {task_id}"), int(task_id))
+        if parents:
+            match = self.parent_jump.findData(int(current_parent_id)) if current_parent_id is not None else -1
+            self.parent_jump.setCurrentIndex(match if match >= 0 else 0)
+        self.parent_jump.blockSignals(False)
+
+        if not parents:
+            summary = "No visible tasks in the current view."
+        elif current_parent_id is None or current_item_position <= 0:
+            summary = (
+                f"{len(parents)} visible top-level parent task(s). "
+                "Use the jump list to start browsing from the side panels."
+            )
+        else:
+            summary = (
+                f"Parent {current_parent_position}/{current_parent_total} | "
+                f"Item {current_item_position}/{current_item_total} inside the current parent."
+            )
+        if not tree_visible:
+            summary = f"{summary} The main task table is hidden."
+        self.browser_summary.setText(summary)
+
+        self.parent_jump.setEnabled(bool(parents))
+        self.prev_parent_btn.setEnabled(bool(can_prev_parent))
+        self.next_parent_btn.setEnabled(bool(can_next_parent))
+        self.prev_child_btn.setEnabled(bool(can_prev_child))
+        self.next_child_btn.setEnabled(bool(can_next_child))
+        self.toggle_table_btn.setText("Hide table" if tree_visible else "Show table")
 
     def collect_payload(self) -> dict:
         tags = []
