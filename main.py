@@ -42,6 +42,7 @@ from capture_actions import CaptureExecutionResult, execute_capture_intent
 from details_panel import TaskDetailsPanel
 from auto_backup import create_versioned_backup, rotate_backups
 from help_ui import HelpDialog
+from context_help import attach_context_help, create_context_help_header
 from calendar_widgets import TaskCalendarWidget
 from reminders_ui import ReminderBatchDialog
 from archive_ui import ArchiveBrowserDialog
@@ -286,6 +287,12 @@ class MainWindow(QMainWindow):
             "Capture new work, search the current dataset, and switch the "
             "active perspective without leaving the dock.",
         )
+        self.capture_help_btn = attach_context_help(
+            capture_section,
+            "capture_and_search",
+            self,
+            tooltip="Open help for quick add and search",
+        )
         controls_layout.addWidget(capture_section)
 
         top_layout = QGridLayout()
@@ -316,6 +323,12 @@ class MainWindow(QMainWindow):
             "Perspectives",
             "Keep major views visible as first-class navigation targets and "
             "switch them without hunting through menus.",
+        )
+        self.perspectives_help_btn = attach_context_help(
+            navigation_section,
+            "perspectives",
+            self,
+            tooltip="Open help for perspectives and views",
         )
         controls_layout.addWidget(navigation_section)
         navigation_section.body_layout.addWidget(self.perspective_bar)
@@ -348,6 +361,13 @@ class MainWindow(QMainWindow):
         main.setObjectName("MainTreeHost")
         v = QVBoxLayout(main)
         configure_box_layout(v, margins=(8, 8, 8, 8), spacing=8)
+        self._task_workspace_header = create_context_help_header(
+            "Task workspace",
+            "main_task_workspace",
+            self,
+            tooltip="Open help for the task workspace",
+        )
+        v.addWidget(self._task_workspace_header)
         self._table_placeholder = QLabel(
             "Task table is floating in a separate window.\nUse View > Float task table to dock it back."
         )
@@ -1119,6 +1139,12 @@ class MainWindow(QMainWindow):
             "Calendar",
             "Browse dated work at a glance and create a task directly from a "
             "day by double-clicking it.",
+        )
+        self.calendar_help_btn = attach_context_help(
+            calendar_section,
+            "calendar_agenda",
+            self,
+            tooltip="Open help for the calendar and agenda view",
         )
         self.calendar = TaskCalendarWidget()
         self.calendar.setGridVisible(True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtGui import QFont
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from context_help import attach_context_help
 from ui_layout import (
     EmptyStateStack,
     SectionPanel,
@@ -33,28 +35,44 @@ class RelationshipsPanel(QWidget):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(8, 8, 8, 8), spacing=10)
 
-        intro_panel = SectionPanel(
-            "Relationship inspector",
-            "Dependencies, structure, and shared context stay grouped by "
-            "purpose instead of appearing as one long stack of unrelated lists.",
+        intro_panel = SectionPanel("Relationship inspector")
+        self.help_btn = attach_context_help(
+            intro_panel,
+            "relationships_panel",
+            self,
+            tooltip="Open help for the relationship inspector",
         )
-        self.intro = QLabel(
-            "This panel surfaces direct relationships for the selected "
-            "task: dependencies, tasks blocked by it, same-tag peers, "
-            "same-project tasks, and project health context."
+        intro_panel.setToolTip(
+            "Inspect dependencies, nearby structure, shared tags, waiting "
+            "context, and project-related context for the active task."
         )
-        self.intro.setWordWrap(True)
-        intro_panel.body_layout.addWidget(self.intro)
+        self.active_task_label = QLabel("No task selected")
+        self.active_task_label.setObjectName("RelationshipsActiveTaskLabel")
+        self.active_task_label.setWordWrap(True)
+        self.active_task_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        active_font = QFont(self.active_task_label.font())
+        active_font.setBold(True)
+        active_font.setPointSize(max(active_font.pointSize(), 11))
+        self.active_task_label.setFont(active_font)
+        intro_panel.body_layout.addWidget(self.active_task_label)
 
-        self.summary = QLabel("No task selected")
-        self.summary.setObjectName("RelationshipsActiveTaskLabel")
-        self.summary.setWordWrap(True)
-        self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        intro_panel.body_layout.addWidget(self.summary)
+        self.meta_label = QLabel("")
+        self.meta_label.setObjectName("RelationshipsMetaLabel")
+        self.meta_label.setWordWrap(True)
+        self.meta_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.meta_label.setVisible(False)
+        intro_panel.body_layout.addWidget(self.meta_label)
 
         self.path_label = QLabel("")
         self.path_label.setWordWrap(True)
-        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.path_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.path_label.setVisible(False)
         intro_panel.body_layout.addWidget(self.path_label)
         root.addWidget(intro_panel)
 
@@ -248,8 +266,14 @@ class RelationshipsPanel(QWidget):
 
     def set_relationships(self, data: dict | None):
         if not data:
-            self.summary.setText("Active task: none")
+            self.active_task_label.setText("No task selected")
+            self.active_task_label.setToolTip(
+                "Current active task shown by the relationship inspector."
+            )
+            self.meta_label.setText("")
+            self.meta_label.setVisible(False)
             self.path_label.setText("")
+            self.path_label.setVisible(False)
             for key, lst in self._lists.items():
                 lst.clear()
                 stack = lst.parentWidget()
@@ -264,28 +288,43 @@ class RelationshipsPanel(QWidget):
         project_summary = data.get("project_summary") or {}
         due_load = data.get("due_day_load") or {}
 
-        summary_bits = [
-            f"Active task: {str(task.get('description') or '')}",
-            f"Status: {str(task.get('status') or '')}",
-            f"Priority: {str(task.get('priority') or '')}",
+        task_title = str(task.get("description") or "").strip() or "(untitled task)"
+        self.active_task_label.setText(task_title)
+
+        meta_bits = [
+            f"Status: {str(task.get('status') or '').strip() or '-'}",
+            f"Priority: {str(task.get('priority') or '').strip() or '-'}",
+        ]
+        self.meta_label.setText("   ".join(meta_bits))
+        self.meta_label.setVisible(True)
+
+        tooltip_bits = [
+            "Relationship inspector for the active task.",
+            f"Task: {task_title}",
+            meta_bits[0],
+            meta_bits[1],
         ]
         state_label = str(project_summary.get("state_label") or "").strip()
         if state_label:
-            summary_bits.append(f"Project state: {state_label}")
+            tooltip_bits.append(f"Project state: {state_label}")
         next_action = str(project_summary.get("next_action_description") or "").strip()
         if next_action:
-            summary_bits.append(f"Next action: {next_action}")
+            tooltip_bits.append(f"Next action: {next_action}")
         stalled_reason = str(project_summary.get("stalled_reason_text") or "").strip()
         if stalled_reason:
-            summary_bits.append(f"Stalled because: {stalled_reason}")
+            tooltip_bits.append(f"Stalled because: {stalled_reason}")
         if str(due_load.get("warning") or "").strip():
-            summary_bits.append(str(due_load.get("warning")))
+            tooltip_bits.append(str(due_load.get("warning")))
         elif due_load:
-            summary_bits.append(
+            tooltip_bits.append(
                 f"Due-day load: {int(due_load.get('task_count') or 0)} task(s), "
                 f"{int(due_load.get('high_priority_count') or 0)} high-priority"
             )
-        self.summary.setText(" | ".join(summary_bits))
+        tooltip_text = "\n".join(
+            bit for bit in tooltip_bits if str(bit).strip()
+        )
+        self.active_task_label.setToolTip(tooltip_text)
+        self.meta_label.setToolTip(tooltip_text)
 
         ancestors = data.get("ancestors") or []
         path_parts = [
@@ -294,9 +333,10 @@ class RelationshipsPanel(QWidget):
             if str(row.get("description") or "").strip()
         ]
         path_parts.append(str(task.get("description") or ""))
-        self.path_label.setText(
-            "Project path: " + " > ".join(path_parts) if path_parts else ""
-        )
+        path_text = "Project: " + " > ".join(path_parts) if path_parts else ""
+        self.path_label.setText(path_text)
+        self.path_label.setVisible(bool(path_text.strip()))
+        self.path_label.setToolTip(path_text or tooltip_text)
 
         for key, lst in self._lists.items():
             rows = data.get(key) or []

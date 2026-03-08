@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from context_help import attach_context_help
 from ui_layout import (
     SectionPanel,
     add_form_row,
@@ -43,6 +44,12 @@ class FilterPanel(QWidget):
         status_panel = SectionPanel(
             "Status",
             "Select which task statuses stay visible in the current view.",
+        )
+        self.help_btn = attach_context_help(
+            status_panel,
+            "filter_panel",
+            self,
+            tooltip="Open help for search and filters",
         )
         v_status = QVBoxLayout()
         configure_box_layout(v_status)

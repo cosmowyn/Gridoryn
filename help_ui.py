@@ -64,6 +64,8 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><strong>Active task selection stays synchronized</strong> across the main tree, details, relationship inspector, focus mode, project cockpit, and status bar so the current record is always clear.</li>
             <li><strong>Project cockpit</strong> turns top-level work into a local-first project workspace with charters, phases, milestones, deliverables, baselines, workload, and structured risk/issue/assumption/decision registers.</li>
             <li><strong>Major docks now share a consistent workspace layout</strong> with top-aligned sections, local action rows, bounded data regions, and contextual empty states instead of long stacks of detached controls.</li>
+            <li><strong>Major panels and dialogs now expose a small contextual help button</strong> in their header area, so you can jump straight to the matching guide chapter without searching manually.</li>
+            <li><strong>Section headers stay compact</strong> so current records, controls, and data appear sooner, while longer explanation text lives in tooltips and the embedded guide instead of prime screen space.</li>
             <li><strong>Mouse-wheel protection on editor controls</strong> prevents accidental changes while you are simply scrolling through docks and forms.</li>
             <li><strong>Project health is also visible in the main tree</strong> through a dedicated Health column, so you can scan project status without opening the cockpit.</li>
             <li><strong>Workspace profiles</strong> keep multiple databases explicit and let each workspace restore its own layout and view state.</li>
@@ -280,6 +282,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><strong>Completed / Archive</strong>: done and archived content for cleanup or restoration.</li>
         </ul>
         <p>The top navigation area includes a dedicated <strong>perspective button bar</strong> so the active perspective is always visible and highlighted.</p>
+        <p>Major view headers include a contextual <strong>?</strong> button that jumps directly to the matching help chapter for the current surface.</p>
         <p><strong>Saved views</strong> persist the current search text and filter state so you can reload a named working context later.</p>
         <p><strong>Sort modes</strong>:</p>
         <ul>

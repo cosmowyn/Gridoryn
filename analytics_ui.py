@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from context_help import attach_context_help
 from ui_layout import (
     EmptyStateStack,
     SectionPanel,
@@ -39,6 +40,12 @@ class AnalyticsPanel(QWidget):
             "Analytics controls",
             "Adjust analysis windows and refresh the local dashboard without "
             "leaving the current workspace.",
+        )
+        self.help_btn = attach_context_help(
+            controls_panel,
+            "analytics_panel",
+            self,
+            tooltip="Open help for analytics",
         )
         controls = QFormLayout()
         configure_form_layout(controls, label_width=150)

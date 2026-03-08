@@ -53,14 +53,16 @@ def test_active_task_selection_stays_synchronized_across_views(
 
         window._focus_task_by_id(child_one)
         qapp.processEvents()
-        assert "Child A1" in window.relationships_panel.summary.text()
+        assert window.relationships_panel.active_task_label.text() == "Child A1"
+        assert "Status:" in window.relationships_panel.meta_label.text()
+        assert window.relationships_panel.active_task_label.font().bold()
         assert "Child A1" in window.focus_panel.current_task.text()
         assert "Child A1" in window._active_task_label.text()
         assert window.details_panel.task_id() == child_one
 
         window._focus_task_by_id(child_two)
         qapp.processEvents()
-        assert "Child A2" in window.relationships_panel.summary.text()
+        assert window.relationships_panel.active_task_label.text() == "Child A2"
         assert "Child A2" in window.focus_panel.current_task.text()
         assert "Child A2" in window._active_task_label.text()
         assert window.details_panel.task_id() == child_two
@@ -103,7 +105,7 @@ def test_relationship_inspector_navigation_updates_main_selection(
 
         assert window._selected_task_id() == child_one
         assert window.details_panel.task_id() == child_one
-        assert "Child A1" in window.relationships_panel.summary.text()
+        assert window.relationships_panel.active_task_label.text() == "Child A1"
     finally:
         window.close()
         qapp.processEvents()

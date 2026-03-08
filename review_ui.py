@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from context_help import attach_context_help
 from ui_layout import (
     EmptyStateStack,
     SectionPanel,
@@ -66,24 +67,20 @@ class ReviewWorkflowPanel(QWidget):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(8, 8, 8, 8), spacing=10)
 
-        guide_panel = SectionPanel(
-            "Weekly review guide",
-            "Use the dock as a maintenance workflow, not just a category list.",
-        )
-        self.guide = QLabel(
-            "Suggested flow: Inbox -> Overdue -> Milestones / Deliverables -> No Due Date -> "
-            "Projects -> Waiting -> Archive. "
-            "Use Acknowledge to hide items you have already handled."
-        )
-        self.guide.setWordWrap(True)
-        self.guide.setToolTip("Guidance for running a quick weekly review pass.")
-        guide_panel.body_layout.addWidget(self.guide)
-        root.addWidget(guide_panel)
-
         controls_panel = SectionPanel(
-            "Review controls",
-            "Thresholds stay close to the refresh action so the review flow is "
-            "easy to re-run during a cleanup pass.",
+            "Review workflow",
+            "Thresholds stay close to the refresh action so the review flow "
+            "is easy to re-run during a cleanup pass.",
+        )
+        controls_panel.setToolTip(
+            "Suggested flow: Inbox -> Overdue -> Milestones / Deliverables "
+            "-> No Due Date -> Projects -> Waiting -> Archive."
+        )
+        self.help_btn = attach_context_help(
+            controls_panel,
+            "review_panel",
+            self,
+            tooltip="Open help for the review workflow",
         )
         controls = QFormLayout()
         configure_form_layout(controls, label_width=160)
@@ -105,6 +102,14 @@ class ReviewWorkflowPanel(QWidget):
         self.recent_days.setSuffix(" days")
         add_form_row(controls, "Recent window", self.recent_days)
         controls_panel.body_layout.addLayout(controls)
+
+        self.review_summary = QLabel("Visible items: 0. Hidden handled items: 0.")
+        self.review_summary.setWordWrap(True)
+        self.review_summary.setToolTip(
+            "Compact review summary for visible items and acknowledged items "
+            "currently hidden from this pass."
+        )
+        controls_panel.body_layout.addWidget(self.review_summary)
 
         self.refresh_btn = QPushButton("Refresh review")
         self.refresh_btn.setToolTip("Refresh all review categories using current thresholds.")
@@ -321,9 +326,7 @@ class ReviewWorkflowPanel(QWidget):
             stack = getattr(parent_page, "_stack", None)
             if isinstance(stack, EmptyStateStack):
                 stack.set_has_content(bool(rows))
-        self.guide.setText(
-            "Suggested flow: Inbox -> Overdue -> Milestones / Deliverables -> No Due Date -> "
-            "Projects -> Waiting -> Archive. "
+        self.review_summary.setText(
             f"Visible items: {total_visible}. Hidden handled items: {total_hidden}."
         )
         self._update_action_states()

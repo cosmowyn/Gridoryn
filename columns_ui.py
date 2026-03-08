@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
     QComboBox, QPushButton, QListWidget, QListWidgetItem, QFormLayout
 )
 
+from context_help import attach_context_help
 from ui_layout import (
     DEFAULT_DIALOG_MARGINS,
     EmptyStateStack,
@@ -29,13 +30,13 @@ class AddColumnDialog(QDialog):
             "Custom column definition",
             "Add a reusable custom field to tasks in this workspace.",
         )
-        v.addWidget(section, 1)
-
-        intro = QLabel(
-            "Choose the field name and type. List columns can define starting values."
+        self.help_btn = attach_context_help(
+            section,
+            "custom_columns_dialog",
+            self,
+            tooltip="Open help for custom columns",
         )
-        intro.setWordWrap(True)
-        section.body_layout.addWidget(intro)
+        v.addWidget(section, 1)
 
         form = QFormLayout()
         configure_form_layout(form, label_width=100)
@@ -96,6 +97,12 @@ class RemoveColumnDialog(QDialog):
         section = SectionPanel(
             "Available custom columns",
             "Removing a custom column also removes its stored values.",
+        )
+        self.help_btn = attach_context_help(
+            section,
+            "custom_columns_dialog",
+            self,
+            tooltip="Open help for custom columns",
         )
         v.addWidget(section, 1)
 

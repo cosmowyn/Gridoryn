@@ -99,10 +99,14 @@ class SectionPanel(QFrame):
         title: str,
         subtitle: str = "",
         parent: QWidget | None = None,
+        *,
+        show_subtitle: bool = False,
     ):
         super().__init__(parent)
         self.setObjectName("SectionPanel")
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        self._show_subtitle = bool(show_subtitle)
+        self._subtitle_text = ""
 
         root = QVBoxLayout(self)
         configure_box_layout(
@@ -128,7 +132,7 @@ class SectionPanel(QFrame):
         self.subtitle_label = QLabel(str(subtitle or ""))
         self.subtitle_label.setObjectName("SectionSubtitleLabel")
         self.subtitle_label.setWordWrap(True)
-        self.subtitle_label.setVisible(bool(str(subtitle or "").strip()))
+        self.subtitle_label.setVisible(False)
         title_col.addWidget(self.subtitle_label)
 
         header_row.addLayout(title_col, 1)
@@ -144,11 +148,19 @@ class SectionPanel(QFrame):
         self.body_layout = QVBoxLayout()
         configure_box_layout(self.body_layout, spacing=DEFAULT_SECTION_SPACING)
         root.addLayout(self.body_layout, 1)
+        self.set_subtitle(subtitle)
 
     def set_subtitle(self, subtitle: str):
         text = str(subtitle or "")
+        self._subtitle_text = text
         self.subtitle_label.setText(text)
-        self.subtitle_label.setVisible(bool(text.strip()))
+        self.subtitle_label.setVisible(bool(text.strip()) and self._show_subtitle)
+        if text.strip():
+            self.title_label.setToolTip(text)
+            self.setToolTip(text)
+        else:
+            self.title_label.setToolTip("")
+            self.setToolTip("")
 
 
 class EmptyStatePanel(QFrame):

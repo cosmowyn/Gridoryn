@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from auto_backup import backups_dir, delete_restore_point, list_restore_points
 from backup_io import import_payload_into_dbfile, read_backup_file
 from crash_logging import log_event, log_exception
+from context_help import attach_context_help
 from ui_layout import (
     EmptyStateStack,
     SectionPanel,
@@ -48,6 +49,12 @@ class SnapshotHistoryDialog(QDialog):
             "Snapshots are read-only restore points. Restoring always creates "
             "a separate database copy or a new workspace; the current "
             "database is never overwritten in place.",
+        )
+        self.help_btn = attach_context_help(
+            intro_panel,
+            "snapshot_history",
+            self,
+            tooltip="Open help for backups and snapshot history",
         )
         root.addWidget(intro_panel)
 

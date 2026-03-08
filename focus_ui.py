@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from context_help import attach_context_help
 from ui_layout import (
     EmptyStateStack,
     SectionPanel,
@@ -37,13 +38,16 @@ class FocusPanel(QWidget):
             "Keep a compact, low-friction work list without leaving the main "
             "tree-driven workflow.",
         )
-        self.intro = QLabel(
-            "Focus mode surfaces overdue work, today work, and next actionable tasks. "
-            "Use it as a short list for the current session without replacing the main tree."
+        intro_panel.setToolTip(
+            "Focus mode surfaces overdue work, today work, and next-action "
+            "tasks without replacing the main tree."
         )
-        self.intro.setWordWrap(True)
-        intro_panel.body_layout.addWidget(self.intro)
-
+        self.help_btn = attach_context_help(
+            intro_panel,
+            "focus_panel",
+            self,
+            tooltip="Open help for focus mode",
+        )
         self.current_task = QLabel("Current selection: none")
         self.current_task.setWordWrap(True)
         self.current_task.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)

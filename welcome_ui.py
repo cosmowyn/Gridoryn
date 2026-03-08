@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from context_help import create_context_help_header
 from platform_utils import shortcut_display_text
 from ui_layout import add_left_aligned_buttons, configure_box_layout
 
@@ -32,13 +33,22 @@ class WelcomeDialog(QDialog):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
 
+        self.help_header = create_context_help_header(
+            "Welcome",
+            "welcome_dialog",
+            self,
+            tooltip="Open help for onboarding and quick start",
+        )
+        root.addWidget(self.help_header)
+
         intro = QGroupBox("Welcome to CustomTaskManager")
         intro_layout = QVBoxLayout(intro)
         configure_box_layout(intro_layout)
         text = QLabel(
-            "Start with Quick add for fast capture, use perspectives to switch context, "
-            "and use Review Workflow to clean the system regularly. The full guide is available in-app with F1. "
-            "You can also open a dedicated demo workspace without touching your current data."
+            "Start with Quick add for fast capture, use perspectives to "
+            "change context, and use Review Workflow to keep the system "
+            "clean. You can also open a dedicated demo workspace without "
+            "touching your current data."
         )
         text.setWordWrap(True)
         intro_layout.addWidget(text)

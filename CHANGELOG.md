@@ -23,6 +23,8 @@ The format is inspired by Keep a Changelog and uses straightforward dated entrie
 - The main workspace layout was refactored so the project cockpit, details panel, relationship inspector, focus mode, analytics, and supporting docks use a more consistent section-based desktop layout with local action rows, bounded data regions, better default dock sizing, and contextual empty states
 - Settings, custom-column management, and template-variable dialogs now follow the same section-based layout doctrine so configuration and editor surfaces feel consistent with the main workspace
 - Active-task synchronization now keeps the relationship inspector, details panel, focus mode, project cockpit context, and status bar aligned to the same current task, and wheel-sensitive controls no longer change values accidentally while the user is scrolling through the UI
+- Contextual in-app help buttons were added to major panels and dialogs that already have matching embedded guide chapters, so each surface can jump directly to its own help topic
+- Section headers across the app now default to compact titles, with explanatory copy moved out of prime UI space into tooltips and contextual help, and several dialogs/panels had visible instructional paragraphs reduced or removed
 
 ## [1.0.0] - 2026-03-08
 

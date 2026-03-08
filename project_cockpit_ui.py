@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from delegates import DateEditorWithClear
+from context_help import attach_context_help, create_context_help_header
 from project_management import (
     DEFAULT_PHASE_NAMES,
     DELIVERABLE_STATUSES,
@@ -70,13 +71,19 @@ class DependencyPickerDialog(QDialog):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
 
-        intro = QLabel(
-            "Choose predecessor items. The selected milestone will be blocked until these complete."
+        self.help_header = create_context_help_header(
+            "Select dependencies",
+            "dependency_picker_dialog",
+            self,
+            tooltip="Open help for project dependencies",
         )
-        intro.setWordWrap(True)
-        root.addWidget(intro)
+        root.addWidget(self.help_header)
 
         self.list = QListWidget()
+        self.list.setToolTip(
+            "Choose predecessor items. The selected milestone stays blocked "
+            "until these items complete."
+        )
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -143,6 +150,14 @@ class MilestoneDialog(QDialog):
 
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
+
+        self.help_header = create_context_help_header(
+            "Milestone",
+            "milestone_dialog",
+            self,
+            tooltip="Open help for milestones",
+        )
+        root.addWidget(self.help_header)
 
         form = QFormLayout()
         configure_form_layout(form, label_width=150)
@@ -273,6 +288,14 @@ class DeliverableDialog(QDialog):
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
 
+        self.help_header = create_context_help_header(
+            "Deliverable",
+            "deliverable_dialog",
+            self,
+            tooltip="Open help for deliverables",
+        )
+        root.addWidget(self.help_header)
+
         form = QFormLayout()
         configure_form_layout(form, label_width=150)
 
@@ -377,6 +400,14 @@ class RegisterEntryDialog(QDialog):
 
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(10, 10, 10, 10), spacing=10)
+
+        self.help_header = create_context_help_header(
+            "Register entry",
+            "register_entry_dialog",
+            self,
+            tooltip="Open help for project registers",
+        )
+        root.addWidget(self.help_header)
 
         form = QFormLayout()
         configure_form_layout(form, label_width=150)
@@ -717,6 +748,12 @@ class ProjectCockpitPanel(QWidget):
             "Project cockpit",
             "Select a project, review delivery health, and manage milestones, "
             "deliverables, risks, timeline, and workload from one place.",
+        )
+        self.help_btn = attach_context_help(
+            nav_panel,
+            "project_cockpit",
+            self,
+            tooltip="Open help for the project cockpit",
         )
         nav_layout = QFormLayout()
         configure_form_layout(nav_layout, label_width=90)

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from context_help import attach_context_help
 from ui_layout import (
     DEFAULT_DIALOG_MARGINS,
     EmptyStateStack,
@@ -42,14 +43,17 @@ class TemplateVariablesDialog(QDialog):
             "Template values",
             "Fill in placeholder values before inserting the template.",
         )
-        root.addWidget(section, 1)
-
-        intro = QLabel(
-            "Provide values for the template placeholders. Date-related fields "
-            "default to today when left empty."
+        self.help_btn = attach_context_help(
+            section,
+            "template_variables_dialog",
+            self,
+            tooltip="Open help for templates and variables",
         )
-        intro.setWordWrap(True)
-        section.body_layout.addWidget(intro)
+        section.setToolTip(
+            "Provide values for template placeholders. Placeholder names "
+            "containing 'date' default to today's ISO date."
+        )
+        root.addWidget(section, 1)
 
         form_container = QWidget()
         form_container_layout = QVBoxLayout(form_container)

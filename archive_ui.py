@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from context_help import attach_context_help
 from ui_layout import (
     DEFAULT_DIALOG_MARGINS,
     EmptyStateStack,
@@ -43,6 +44,12 @@ class ArchiveBrowserDialog(QDialog):
             "Archive browser",
             "Browse archived task roots and restore only the items you want "
             "back in the active tree.",
+        )
+        self.help_btn = attach_context_help(
+            intro_panel,
+            "archive_browser",
+            self,
+            tooltip="Open help for archive browsing and restore",
         )
         root.addWidget(intro_panel)
 

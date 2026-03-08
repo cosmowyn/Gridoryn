@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from crash_logging import log_event, log_exception
+from context_help import attach_context_help
 from ui_layout import (
     EmptyStateStack,
     SectionPanel,
@@ -47,6 +48,12 @@ class WorkspaceManagerDialog(QDialog):
             "Workspaces keep local databases explicit. Each workspace points "
             "to one SQLite file and restores its own saved view/layout "
             "preferences when you switch.",
+        )
+        self.help_btn = attach_context_help(
+            intro_panel,
+            "workspace_manager",
+            self,
+            tooltip="Open help for workspace profiles",
         )
         root.addWidget(intro_panel)
 

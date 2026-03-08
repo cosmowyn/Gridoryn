@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from context_help import attach_context_help
 from delegates import DateEditorWithClear, DateTimeEditorWithClear
 from model import PLANNED_BUCKETS, RECURRENCE_FREQUENCIES
 from ui_layout import (
@@ -59,6 +60,12 @@ class TaskDetailsPanel(QWidget):
             "Task browser",
             "Browse the current visible task set even when the main tree is "
             "hidden or floated to another monitor.",
+        )
+        self.help_btn = attach_context_help(
+            browser_panel,
+            "details_panel",
+            self,
+            tooltip="Open help for the details panel",
         )
 
         self.browser_summary = QLabel("No visible tasks in the current view.")
