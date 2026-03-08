@@ -95,9 +95,26 @@ Backup exports, theme exports, and automatic snapshots are local user files and 
 
 ## Testing
 
-There is currently no full automated test suite in the repository.
+The repository includes an automated `pytest` test suite covering critical application logic such as:
 
-Recommended validation steps:
+- database creation, migrations, integrity checks, and backups
+- model behavior, ordering, filtering, and project intelligence logic
+- quick-add / capture parsing, templates, workspace profiles, and demo data
+- crash logging and related production-hardening helpers
+
+Install development dependencies first:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+Run the full suite:
+
+```bash
+python -m pytest -q
+```
+
+Additional validation steps:
 
 ```bash
 python -m py_compile *.py
@@ -117,8 +134,6 @@ print("UI smoke ok")
 PY
 ```
 
-If you add automated tests later, place them in a `tests/` directory and update `requirements-dev.txt` and CI accordingly.
-
 ## Project Structure
 
 ```text
@@ -132,6 +147,7 @@ theme_io.py          Theme import/export
 backup_io.py         Backup import/export and restore logic
 buildfile.py         Interactive PyInstaller build helper
 app_paths.py         Cross-platform resource and app-data path helpers
+tests/               Pytest suite for core logic and regression coverage
 ```
 
 ## License and Disclaimer
