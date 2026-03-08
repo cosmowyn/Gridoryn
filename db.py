@@ -91,6 +91,16 @@ class Database:
                 pass
             raise
 
+    def close(self):
+        conn = getattr(self, "conn", None)
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:
+            pass
+        self.conn = None
+
     def _configure(self):
         cur = self.conn.cursor()
         cur.execute("PRAGMA journal_mode=WAL;")

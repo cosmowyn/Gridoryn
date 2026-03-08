@@ -45,6 +45,15 @@ class WorkspaceProfileManager:
             "workspaces": workspaces,
         }
 
+    def _normalized_db_path(self, db_path: str | None) -> str:
+        raw = str(db_path or "").strip()
+        if not raw:
+            return ""
+        try:
+            return str(Path(raw).expanduser().resolve())
+        except Exception:
+            return raw
+
     def _save_registry(self):
         payload = {
             "current": self._registry.get("current"),
@@ -137,6 +146,22 @@ class WorkspaceProfileManager:
     def save_state_for(self, workspace_id: str):
         self._write_state(str(workspace_id), self.capture_current_state())
 
+    def _captured_state_for(self, workspace_id: str) -> dict[str, object]:
+        prefix = self._workspace_state_prefix(workspace_id)
+        state: dict[str, object] = {}
+        for key in self.settings.allKeys():
+            text = str(key)
+            if not text.startswith(prefix):
+                continue
+            state[text[len(prefix):]] = self.settings.value(text)
+        return state
+
+    def _remove_state_for(self, workspace_id: str):
+        prefix = self._workspace_state_prefix(workspace_id)
+        for key in [str(k) for k in self.settings.allKeys() if str(k).startswith(prefix)]:
+            self.settings.remove(key)
+        self.settings.sync()
+
     def ensure_workspace_state(self, workspace_id: str):
         prefix = self._workspace_state_prefix(workspace_id)
         if any(str(key).startswith(prefix) for key in self.settings.allKeys()):
@@ -173,6 +198,17 @@ class WorkspaceProfileManager:
         row["id"] = str(workspace_id)
         row["is_current"] = str(workspace_id) == str(self._registry.get("current") or "")
         return row
+
+    def workspaces_for_db_path(self, db_path: str | None) -> list[dict]:
+        target_path = self._normalized_db_path(db_path)
+        if not target_path:
+            return []
+        matches = []
+        for row in self.list_workspaces():
+            row_path = self._normalized_db_path(str(row.get("db_path") or ""))
+            if row_path == target_path:
+                matches.append(row)
+        return matches
 
     def current_workspace(self) -> dict:
         current = str(self._registry.get("current") or "default")
@@ -228,15 +264,99 @@ class WorkspaceProfileManager:
             self.restore_state_for(str(workspace_id))
         return self.current_workspace()
 
-    def remove_workspace(self, workspace_id: str):
+    def workspace_removal_plan(self, workspace_id: str) -> dict:
         workspace_key = str(workspace_id)
-        current = str(self._registry.get("current") or "")
-        if workspace_key == current:
-            raise WorkspaceProfileError("The active workspace cannot be removed.")
+        row = self.workspace_by_id(workspace_key)
+        if row is None:
+            raise WorkspaceProfileError(f"Workspace '{workspace_key}' does not exist.")
+
+        current = self.current_workspace()
+        current_id = str(current.get("id") or "")
+        target_db_path = self._normalized_db_path(str(row.get("db_path") or ""))
+        current_db_path = self._normalized_db_path(str(current.get("db_path") or ""))
+        other_refs = [
+            item
+            for item in self.workspaces_for_db_path(target_db_path)
+            if str(item.get("id") or "") != workspace_key
+        ]
+        workspace_count = len(self.list_workspaces())
+        db_exists = False
+        if target_db_path:
+            try:
+                db_exists = Path(target_db_path).exists()
+            except Exception:
+                db_exists = False
+
+        plan = {
+            "workspace_id": workspace_key,
+            "workspace_name": str(row.get("name") or workspace_key),
+            "db_path": target_db_path,
+            "is_current": workspace_key == current_id,
+            "workspace_count": workspace_count,
+            "remaining_workspace_count": max(0, workspace_count - 1),
+            "db_exists": db_exists,
+            "db_shared_with_other_workspaces": bool(other_refs),
+            "other_workspace_refs": other_refs,
+            "uses_current_db_path": bool(target_db_path) and target_db_path == current_db_path,
+            "can_remove": True,
+            "can_delete_db_file": False,
+            "reason": "",
+        }
+
+        if plan["is_current"]:
+            plan["can_remove"] = False
+            plan["reason"] = "The active workspace cannot be removed."
+            return plan
+        if plan["remaining_workspace_count"] < 1:
+            plan["can_remove"] = False
+            plan["reason"] = "At least one workspace database must remain."
+            return plan
+
+        if (
+            target_db_path
+            and db_exists
+            and not plan["db_shared_with_other_workspaces"]
+            and not plan["uses_current_db_path"]
+        ):
+            plan["can_delete_db_file"] = True
+        return plan
+
+    def remove_workspace(self, workspace_id: str, *, delete_db_file: bool = False) -> dict:
+        plan = self.workspace_removal_plan(workspace_id)
+        workspace_key = str(plan.get("workspace_id") or "")
+        if not plan["can_remove"]:
+            raise WorkspaceProfileError(str(plan["reason"] or "Workspace cannot be removed."))
+        if delete_db_file and not plan["can_delete_db_file"]:
+            raise WorkspaceProfileError(
+                "The database file cannot be removed because it is missing, "
+                "shared, or currently in use."
+            )
+
         workspaces = self._registry.setdefault("workspaces", {})
+        original_record = deepcopy(workspaces.get(workspace_key) or {})
+        original_state = self._captured_state_for(workspace_key)
+        deleted_db_file = False
+
         workspaces.pop(workspace_key, None)
-        prefix = self._workspace_state_prefix(workspace_key)
-        for key in [str(k) for k in self.settings.allKeys() if str(k).startswith(prefix)]:
-            self.settings.remove(key)
-        self.settings.sync()
-        self._save_registry()
+        self._remove_state_for(workspace_key)
+        try:
+            self._save_registry()
+            if delete_db_file:
+                db_path = str(plan.get("db_path") or "").strip()
+                if db_path:
+                    Path(db_path).unlink()
+                    deleted_db_file = True
+        except Exception as exc:
+            if original_record:
+                self._registry.setdefault("workspaces", {})[workspace_key] = original_record
+                self._save_registry()
+            if original_state:
+                self._write_state(workspace_key, original_state)
+            raise WorkspaceProfileError(str(exc)) from exc
+
+        return {
+            "workspace_id": workspace_key,
+            "workspace_name": str(plan.get("workspace_name") or workspace_key),
+            "db_path": str(plan.get("db_path") or ""),
+            "deleted_db_file": deleted_db_file,
+        }

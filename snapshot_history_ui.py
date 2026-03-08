@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from auto_backup import backups_dir, list_restore_points
+from auto_backup import backups_dir, delete_restore_point, list_restore_points
 from backup_io import import_payload_into_dbfile, read_backup_file
 from crash_logging import log_event, log_exception
 from ui_layout import add_left_aligned_buttons, configure_box_layout
@@ -66,6 +66,7 @@ class SnapshotHistoryDialog(QDialog):
         self.open_folder_btn = QPushButton("Open snapshot folder")
         self.restore_btn = QPushButton("Restore to DB copy")
         self.workspace_btn = QPushButton("Create workspace from snapshot")
+        self.delete_btn = QPushButton("Delete snapshot")
         self.close_btn = QPushButton("Close")
         add_left_aligned_buttons(
             actions,
@@ -73,6 +74,7 @@ class SnapshotHistoryDialog(QDialog):
             self.open_folder_btn,
             self.restore_btn,
             self.workspace_btn,
+            self.delete_btn,
             self.close_btn,
         )
         root.addLayout(actions)
@@ -81,6 +83,7 @@ class SnapshotHistoryDialog(QDialog):
         self.open_folder_btn.clicked.connect(self._open_folder)
         self.restore_btn.clicked.connect(self._restore_to_copy)
         self.workspace_btn.clicked.connect(self._create_workspace_from_snapshot)
+        self.delete_btn.clicked.connect(self._delete_snapshot)
         self.close_btn.clicked.connect(self.reject)
 
         self.refresh()
@@ -247,3 +250,50 @@ class SnapshotHistoryDialog(QDialog):
         if res == QMessageBox.StandardButton.Yes:
             self._switch_workspace_id = str(record.get("id") or "")
             self.accept()
+
+    def _delete_snapshot(self):
+        row = self._selected_snapshot()
+        if not row:
+            return
+        filename = str(row.get("filename") or row.get("path") or "snapshot")
+        path = str(row.get("path") or "")
+        res = QMessageBox.warning(
+            self,
+            "Delete snapshot",
+            f"Delete snapshot '{filename}'?\n\n"
+            "This permanently removes the restore point file and cannot "
+            "be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if res != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            log_event(
+                "Snapshot deletion started",
+                context="snapshot.delete",
+                db_path=getattr(self._db, "path", None),
+                details={"snapshot_path": path, "filename": filename},
+            )
+            deleted = delete_restore_point(
+                path,
+                db_path=getattr(self._db, "path", None),
+            )
+        except Exception as e:
+            log_exception(
+                e,
+                context="snapshot.delete",
+                db_path=getattr(self._db, "path", None),
+            )
+            QMessageBox.warning(self, "Snapshot deletion failed", str(e))
+            return
+        log_event(
+            "Snapshot deletion completed",
+            context="snapshot.delete",
+            db_path=getattr(self._db, "path", None),
+            details={
+                "snapshot_path": str(deleted.get("path") or ""),
+                "filename": str(deleted.get("filename") or ""),
+            },
+        )
+        self.refresh()

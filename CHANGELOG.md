@@ -21,6 +21,7 @@ The format is inspired by Keep a Changelog and uses straightforward dated entrie
 - Main application workflows, side panels, command/help surfaces, and filtering logic were expanded to expose the new review, focus, diagnostics, relationship, and workspace capabilities
 - Pytest-based automated coverage was extended and the remaining Qt filter deprecation warnings were removed from the test run
 - Style-only PEP 8 cleanup applied to selected UI/helper modules with no intended functional changes
+- Saved templates, workspace profiles, and snapshot history gained explicit permanent-removal flows with confirmation, database-file safety checks, and safer database closing during window shutdown
 
 ## [0.1.0] - 2026-03-07
 

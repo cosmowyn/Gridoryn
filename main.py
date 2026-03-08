@@ -2212,14 +2212,45 @@ class MainWindow(QMainWindow):
 
     def _delete_template_prompt(self):
         templates = self.model.list_templates()
-        names = [str(t.get("name")) for t in templates if str(t.get("name") or "").strip()]
+        rows_by_name = {
+            str(row.get("name") or "").strip(): row
+            for row in templates
+            if str(row.get("name") or "").strip()
+        }
+        names = sorted(rows_by_name)
         if not names:
             QMessageBox.information(self, "No templates", "There are no saved templates.")
             return
         name, ok = QInputDialog.getItem(self, "Delete template", "Template", names, 0, False)
         if not ok or not name:
             return
+        row = rows_by_name.get(str(name), {})
+        created_at = str(row.get("created_at") or "").strip()
+        updated_at = str(row.get("updated_at") or "").strip()
+        details = []
+        if created_at:
+            details.append(f"Created: {created_at}")
+        if updated_at:
+            details.append(f"Updated: {updated_at}")
+        message = f"Delete saved template '{str(name)}'?\n\nThis cannot be undone."
+        if details:
+            message += "\n\n" + "\n".join(details)
+        res = QMessageBox.warning(
+            self,
+            "Delete template",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if res != QMessageBox.StandardButton.Yes:
+            return
         self.model.delete_template(str(name))
+        log_event(
+            "Template deleted",
+            context="template.delete",
+            db_path=self.db.path,
+            details={"template_name": str(name)},
+        )
 
     def _set_status_for_selected_prompt(self):
         ids = self._selected_task_ids()
@@ -4132,6 +4163,11 @@ class MainWindow(QMainWindow):
             self._floating_table_window._allow_close = True
             self._floating_table_window.close()
         super().closeEvent(event)
+        if event.isAccepted():
+            try:
+                self.db.close()
+            except Exception as e:
+                log_exception(e, context="db.close", db_path=self.db.path)
 
 
 def main():

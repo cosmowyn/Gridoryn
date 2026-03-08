@@ -67,6 +67,7 @@ class WorkspaceManagerDialog(QDialog):
         actions = QHBoxLayout()
         self.create_btn = QPushButton("Create workspace")
         self.add_existing_btn = QPushButton("Add existing DB")
+        self.remove_btn = QPushButton("Remove workspace")
         self.switch_btn = QPushButton("Switch")
         self.reveal_btn = QPushButton("Reveal DB folder")
         self.close_btn = QPushButton("Close")
@@ -74,6 +75,7 @@ class WorkspaceManagerDialog(QDialog):
             actions,
             self.create_btn,
             self.add_existing_btn,
+            self.remove_btn,
             self.switch_btn,
             self.reveal_btn,
             self.close_btn,
@@ -82,6 +84,7 @@ class WorkspaceManagerDialog(QDialog):
 
         self.create_btn.clicked.connect(self._create_workspace)
         self.add_existing_btn.clicked.connect(self._add_existing_database)
+        self.remove_btn.clicked.connect(self._remove_workspace)
         self.switch_btn.clicked.connect(self._switch_selected)
         self.reveal_btn.clicked.connect(self._reveal_workspace_path)
         self.close_btn.clicked.connect(self.reject)
@@ -129,11 +132,32 @@ class WorkspaceManagerDialog(QDialog):
             self.lbl_path.setText("-")
             self.lbl_created.setText("-")
             self.lbl_opened.setText("-")
+            self.remove_btn.setEnabled(False)
+            self.remove_btn.setToolTip("Select a workspace to remove it.")
             return
         self.lbl_name.setText(str(row.get("name") or row.get("id") or ""))
         self.lbl_path.setText(str(row.get("db_path") or ""))
         self.lbl_created.setText(str(row.get("created_at") or ""))
         self.lbl_opened.setText(str(row.get("last_opened_at") or ""))
+        try:
+            plan = self._manager.workspace_removal_plan(str(row.get("id") or ""))
+        except Exception:
+            self.remove_btn.setEnabled(False)
+            self.remove_btn.setToolTip("This workspace cannot be removed.")
+            return
+        self.remove_btn.setEnabled(bool(plan.get("can_remove")))
+        tooltip = (
+            "Remove the workspace profile or remove the profile and its "
+            "database file. This cannot be undone."
+        )
+        if not plan.get("can_remove"):
+            tooltip = str(plan.get("reason") or tooltip)
+        elif not plan.get("can_delete_db_file"):
+            tooltip = (
+                "Remove the workspace profile. The database file will stay "
+                "because it is shared, active, or missing."
+            )
+        self.remove_btn.setToolTip(tooltip)
 
     def _create_workspace(self):
         name, ok = QInputDialog.getText(self, "Create workspace", "Workspace name:")
@@ -211,3 +235,103 @@ class WorkspaceManagerDialog(QDialog):
         )
         self._switch_workspace_id = workspace_id
         self.accept()
+
+    def _remove_workspace(self):
+        row = self._selected_workspace()
+        if not row:
+            return
+        workspace_id = str(row.get("id") or "")
+        name = str(row.get("name") or workspace_id or "")
+        try:
+            plan = self._manager.workspace_removal_plan(workspace_id)
+        except Exception as e:
+            log_exception(e, context="workspace.remove.plan")
+            QMessageBox.warning(self, "Workspace removal failed", str(e))
+            return
+
+        if not plan.get("can_remove"):
+            QMessageBox.information(
+                self,
+                "Workspace cannot be removed",
+                str(plan.get("reason") or "This workspace cannot be removed."),
+            )
+            return
+
+        delete_db_file = False
+        if plan.get("can_delete_db_file"):
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Remove workspace")
+            msg_box.setText(
+                f"Remove workspace '{name}'?\n\n"
+                "This action cannot be undone."
+            )
+            msg_box.setInformativeText(
+                "You can remove only the workspace profile, or remove the "
+                "profile and permanently delete its SQLite database file."
+            )
+            profile_btn = msg_box.addButton(
+                "Remove profile only",
+                QMessageBox.ButtonRole.AcceptRole,
+            )
+            delete_btn = msg_box.addButton(
+                "Remove profile and DB",
+                QMessageBox.ButtonRole.DestructiveRole,
+            )
+            cancel_btn = msg_box.addButton(QMessageBox.StandardButton.Cancel)
+            msg_box.exec()
+            clicked = msg_box.clickedButton()
+            if clicked == cancel_btn:
+                return
+            delete_db_file = clicked == delete_btn
+            if clicked not in (profile_btn, delete_btn):
+                return
+        else:
+            res = QMessageBox.warning(
+                self,
+                "Remove workspace",
+                f"Remove workspace '{name}'?\n\n"
+                "This action cannot be undone.\n\n"
+                "The database file will be kept because it is shared, "
+                "active, or missing.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if res != QMessageBox.StandardButton.Yes:
+                return
+
+        try:
+            log_event(
+                "Workspace removal started",
+                context="workspace.remove",
+                db_path=str(row.get("db_path") or ""),
+                details={
+                    "workspace_id": workspace_id,
+                    "workspace_name": name,
+                    "delete_db_file": delete_db_file,
+                },
+            )
+            report = self._manager.remove_workspace(
+                workspace_id,
+                delete_db_file=delete_db_file,
+            )
+        except Exception as e:
+            log_exception(
+                e,
+                context="workspace.remove",
+                db_path=str(row.get("db_path") or ""),
+            )
+            QMessageBox.warning(self, "Workspace removal failed", str(e))
+            return
+
+        log_event(
+            "Workspace removal completed",
+            context="workspace.remove",
+            db_path=str(report.get("db_path") or ""),
+            details={
+                "workspace_id": workspace_id,
+                "workspace_name": name,
+                "deleted_db_file": bool(report.get("deleted_db_file")),
+            },
+        )
+        self.refresh()

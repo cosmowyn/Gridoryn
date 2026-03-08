@@ -97,6 +97,26 @@ def last_restore_point(db_path: str | None = None) -> dict | None:
     return points[0] if points else None
 
 
+def delete_restore_point(path: str | Path, db_path: str | None = None) -> dict:
+    backup_path = Path(path).expanduser().resolve()
+    backup_root = backups_dir(db_path).resolve()
+    if backup_path.parent != backup_root:
+        raise ValueError("Snapshot is outside the expected backup directory.")
+    if not backup_path.name.startswith("task_snapshot_") or backup_path.suffix.lower() != ".json":
+        raise ValueError("Only versioned snapshot files can be removed.")
+    if not backup_path.exists():
+        raise FileNotFoundError(str(backup_path))
+
+    row = {
+        "path": str(backup_path),
+        "filename": backup_path.name,
+        "size_bytes": int(backup_path.stat().st_size),
+    }
+    row.update(snapshot_file_metadata(backup_path))
+    backup_path.unlink()
+    return row
+
+
 def rotate_backups(max_keep: int = 20, db_path: str | None = None):
     keep = max(1, int(max_keep))
     files = sorted(backups_dir(db_path).glob("task_snapshot_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)

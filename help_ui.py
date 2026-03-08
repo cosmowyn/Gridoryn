@@ -63,6 +63,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><strong>Relationship inspector</strong> surfaces dependencies, dependents, same-tag tasks, same-project context, and project health in one place.</li>
             <li><strong>Workspace profiles</strong> keep multiple databases explicit and let each workspace restore its own layout and view state.</li>
             <li><strong>Snapshot history</strong> shows restore points with metadata and restores them safely into a new database copy or workspace.</li>
+            <li><strong>Template, workspace, and snapshot removal</strong> always asks for explicit confirmation before anything is permanently deleted.</li>
             <li><strong>Templates, recurrence, reminders, tags, attachments, backups, themes, and archive restore</strong> are integrated into the same database-backed workflow.</li>
         </ul>
         <p>Use the tree for immediate work, the details panel for deeper metadata, the command palette for fast keyboard actions, the review workflow for weekly cleanup, and analytics for lightweight trust-building metrics.</p>
@@ -488,12 +489,15 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li>Open <strong>File &gt; Workspace profiles</strong> or the command palette to create a workspace, register an existing database, and switch safely.</li>
             <li>Each workspace keeps its own current layout, perspective, column visibility, and related UI state.</li>
             <li>The current workspace name and database path are visible in the main window status bar.</li>
+            <li>Removing a workspace always requires confirmation. The active workspace cannot be removed, and the app keeps at least one workspace database available at all times.</li>
+            <li>Database-file deletion is only offered when that SQLite file is not shared by another workspace and is not currently in use.</li>
         </ul>
         <p><strong>Snapshot history</strong> builds on the existing restore-point system.</p>
         <ul>
             <li>It lists snapshot timestamp, reason, task counts, archived counts, size, and file name.</li>
             <li>Restores are always safe-copy restores: either into a new database file or into a newly created workspace.</li>
             <li>The current live database is not overwritten in place from the snapshot-history dialog.</li>
+            <li>Snapshots can also be permanently removed from the history dialog after a confirmation prompt.</li>
         </ul>
         """,
     ),
@@ -527,6 +531,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
         <ul>
             <li><strong>Save selected as template</strong> stores the current task plus its descendants.</li>
             <li><strong>Create from template</strong> inserts the saved structure under the current selection or at top level.</li>
+            <li><strong>Delete template</strong> asks for confirmation before the saved template is permanently removed.</li>
             <li>Templates preserve hierarchy, notes, tags, custom-column values, attachments, and dependency structure where possible.</li>
         </ul>
         <p><strong>Parameterized templates</strong> support placeholders such as <code>{project_name}</code>, <code>{due_date}</code>, <code>{owner}</code>, and <code>{location}</code>.</p>
