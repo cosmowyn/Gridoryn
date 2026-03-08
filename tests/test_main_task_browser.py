@@ -119,3 +119,31 @@ def test_task_table_toggle_and_side_panel_browsing(tmp_path, qapp, monkeypatch):
     finally:
         window.close()
         qapp.processEvents()
+
+
+def test_refresh_views_after_db_close_does_not_crash(tmp_path, qapp, monkeypatch):
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        assert window.model.add_task_with_values("Project Root")
+        task_id = int(window.model.last_added_task_id())
+        window._focus_task_by_id(task_id)
+        qapp.processEvents()
+
+        window.db.close()
+        window._refresh_active_task_views()
+        window._refresh_focus_panel()
+        window._refresh_review_panel()
+        window._refresh_analytics_panel()
+        window._refresh_calendar_list()
+        window._refresh_calendar_markers()
+        qapp.processEvents()
+
+        assert window._active_task_id is None
+        assert window.project_panel._current_project_id is None
+        assert window.relationships_panel.active_task_label.text() == "No task selected"
+    finally:
+        window._closing_down = True
+        if getattr(window.db, "conn", None) is not None:
+            window.db.close()
+        window.close()
+        qapp.processEvents()

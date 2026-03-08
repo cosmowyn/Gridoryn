@@ -11,8 +11,11 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Callable
 
-from app_metadata import APP_NAME, APP_PROFILE, APP_VERSION
+from app_metadata import APP_LOG_SLUG, APP_NAME, APP_PROFILE, APP_VERSION
 from app_paths import app_data_dir
+
+
+LEGACY_LOG_SLUGS = ("customtaskmanager",)
 
 
 def logs_dir() -> Path:
@@ -26,13 +29,17 @@ def logs_dir() -> Path:
 
 def current_log_path() -> Path:
     ts = datetime.now().strftime("%Y-%m-%d")
-    return logs_dir() / f"{APP_NAME.lower()}_{ts}.log"
+    return logs_dir() / f"{APP_LOG_SLUG}_{ts}.log"
 
 
 def list_log_paths(limit: int = 20) -> list[Path]:
     try:
+        files_by_path: dict[Path, Path] = {}
+        for slug in (APP_LOG_SLUG, *LEGACY_LOG_SLUGS):
+            for path in logs_dir().glob(f"{slug}_*.log"):
+                files_by_path[path] = path
         files = sorted(
-            logs_dir().glob(f"{APP_NAME.lower()}_*.log"),
+            files_by_path.values(),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )

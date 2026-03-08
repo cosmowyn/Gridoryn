@@ -22,8 +22,9 @@ def qapp(tmp_path_factory):
     QSettings.setDefaultFormat(QSettings.Format.IniFormat)
     QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(settings_root))
     app = QApplication.instance() or QApplication([])
-    app.setOrganizationName("FocusToolsTest")
-    app.setApplicationName("CustomTaskManagerTest")
+    app.setOrganizationName("CustomToDoTest")
+    app.setApplicationName("CustomToDoTest")
+    app.setApplicationDisplayName("CustomToDoTest")
     return app
 
 

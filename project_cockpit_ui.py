@@ -56,6 +56,18 @@ from ui_layout import (
 )
 
 
+def _configure_wrapping_summary_label(label: QLabel) -> QLabel:
+    label.setWordWrap(True)
+    label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+    label.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Preferred,
+    )
+    label.setMinimumWidth(0)
+    label.setTextFormat(Qt.TextFormat.PlainText)
+    return label
+
+
 class DependencyPickerDialog(QDialog):
     def __init__(self, targets: list[dict], selected_refs: list[dict] | None = None, parent=None):
         super().__init__(parent)
@@ -864,22 +876,15 @@ class ProjectCockpitPanel(QWidget):
             "for the current project.",
         )
         summary_layout = QFormLayout()
-        configure_form_layout(summary_layout, label_width=190)
-        self.lbl_health = QLabel("-")
-        self.lbl_next_milestone = QLabel("-")
-        self.lbl_blockers = QLabel("-")
-        self.lbl_due_soon = QLabel("-")
-        self.lbl_effort = QLabel("-")
-        self.lbl_variance = QLabel("-")
-        for label in (
-            self.lbl_health,
-            self.lbl_next_milestone,
-            self.lbl_blockers,
-            self.lbl_due_soon,
-            self.lbl_effort,
-            self.lbl_variance,
-        ):
-            label.setWordWrap(True)
+        configure_form_layout(summary_layout, label_width=150)
+        summary_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.status_summary_layout = summary_layout
+        self.lbl_health = _configure_wrapping_summary_label(QLabel("-"))
+        self.lbl_next_milestone = _configure_wrapping_summary_label(QLabel("-"))
+        self.lbl_blockers = _configure_wrapping_summary_label(QLabel("-"))
+        self.lbl_due_soon = _configure_wrapping_summary_label(QLabel("-"))
+        self.lbl_effort = _configure_wrapping_summary_label(QLabel("-"))
+        self.lbl_variance = _configure_wrapping_summary_label(QLabel("-"))
         add_form_row(summary_layout, "Health", self.lbl_health)
         add_form_row(summary_layout, "Next milestone", self.lbl_next_milestone)
         add_form_row(summary_layout, "Blockers / waiting", self.lbl_blockers)

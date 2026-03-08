@@ -17,6 +17,9 @@ dist/
 pip-wheel-metadata/
 build_assets/icons/*.icns
 build_assets/icons/*.iconset/
+!CustomToDo.spec
+!build_assets/icons/
+!build_assets/icons/CustomToDo.icns
 local_signing/
 internal_signing/
 *.pfx

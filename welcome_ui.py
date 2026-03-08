@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app_metadata import APP_NAME
 from context_help import create_context_help_header
 from platform_utils import shortcut_display_text
 from ui_layout import add_left_aligned_buttons, configure_box_layout
@@ -41,14 +42,14 @@ class WelcomeDialog(QDialog):
         )
         root.addWidget(self.help_header)
 
-        intro = QGroupBox("Welcome to CustomTaskManager")
+        intro = QGroupBox(f"Welcome to {APP_NAME}")
         intro_layout = QVBoxLayout(intro)
         configure_box_layout(intro_layout)
         text = QLabel(
             "Start with Quick add for fast capture, use perspectives to "
             "change context, and use Review Workflow to keep the system "
-            "clean. You can also open a dedicated demo workspace without "
-            "touching your current data."
+            "clean. You can also open a dedicated full-featured demo "
+            "workspace without touching your current data."
         )
         text.setWordWrap(True)
         intro_layout.addWidget(text)
@@ -81,9 +82,14 @@ class WelcomeDialog(QDialog):
         self.start_empty_btn = QPushButton("Start empty")
         self.start_empty_btn.setToolTip("Close the guide and start with an empty task list.")
         self.demo_btn = QPushButton("Load demo data here")
-        self.demo_btn.setToolTip("Insert sample data into the current empty workspace.")
+        self.demo_btn.setToolTip(
+            "Insert the full showcase demo set into the current empty workspace."
+        )
         self.demo_workspace_btn = QPushButton("Open demo workspace")
-        self.demo_workspace_btn.setToolTip("Create a separate demo workspace so you can explore features safely.")
+        self.demo_workspace_btn.setToolTip(
+            "Create a separate full-featured demo workspace so you can explore "
+            "features safely."
+        )
         self.help_btn = QPushButton("Open help")
         self.help_btn.setToolTip("Open the embedded guide after closing this dialog.")
         self.review_btn = QPushButton("Open review workflow")

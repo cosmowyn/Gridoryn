@@ -16,8 +16,11 @@ The format is inspired by Keep a Changelog and uses straightforward dated entrie
 
 ### Changed
 
-- Demo/sample data now showcases project-management records and timeline-friendly task metadata
+- Stable product branding was unified around `CustomToDo` across the app UI, packaging metadata, screenshots, and public docs while preserving legacy Qt storage identifiers for backward-compatible local data paths
+- Demo/sample data was expanded into a full showcase workspace with dense timelines, four populated projects, attachments, recurrence examples, richer templates, and cockpit-ready PM records
+- Demo/sample data now uses fictionalized people and sample content only
 - Embedded help and README were updated to document the project cockpit, phase search, milestones, deliverables, baselines, and workload planning
+- Build and release docs now include a stable PyInstaller spec name, a release checklist, real screenshots, versioned release-artifact staging, and a deterministic non-interactive stable build path
 - Project timeline bars can now be dragged horizontally to reschedule task, milestone, and deliverable dates from the cockpit
 - Milestone and deliverable timeline drags now participate in undo/redo, and project-cockpit dock defaults were tightened so action buttons stay visible sooner on smaller monitors
 - The main workspace layout was refactored so the project cockpit, details panel, relationship inspector, focus mode, analytics, and supporting docks use a more consistent section-based desktop layout with local action rows, bounded data regions, better default dock sizing, and contextual empty states

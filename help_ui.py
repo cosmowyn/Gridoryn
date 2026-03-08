@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app_metadata import APP_NAME
 from platform_utils import shortcut_display_text
 
 
@@ -46,8 +47,8 @@ HELP_CHAPTERS: list[HelpChapter] = [
             "analytics",
             "command palette",
         ],
-        body_html="""
-        <p><strong>CustomTaskManager</strong> is a hierarchical task manager focused on fast daily execution and clear review workflows.</p>
+        body_html=f"""
+        <p><strong>{APP_NAME}</strong> is a hierarchical task manager focused on fast daily execution and clear review workflows.</p>
         <ul>
             <li>The <strong>task tree</strong> remains the central workspace for planning, editing, and reordering work.</li>
             <li><strong>Quick add</strong> captures tasks quickly with natural date and priority parsing.</li>
@@ -430,7 +431,8 @@ HELP_CHAPTERS: list[HelpChapter] = [
         <p>The Quick Start dialog appears automatically for a new empty task list and is always available from the Help menu.</p>
         <ul>
             <li>It highlights the quickest ways to start: Quick add, Search, Command palette, and Review Workflow.</li>
-            <li>You can <strong>start empty</strong>, <strong>load sample data</strong>, <strong>open help</strong>, or <strong>jump straight into review mode</strong>.</li>
+            <li>You can <strong>start empty</strong>, <strong>load a full showcase demo</strong>, <strong>open help</strong>, or <strong>jump straight into review mode</strong>.</li>
+            <li>The demo workspace now includes dense project timelines, milestones, deliverables, risk registers, reminders, recurrence, custom columns, attachments, templates, archive data, and saved views so you can tour the whole app immediately.</li>
             <li>The automatic first-run display is skipped for existing users with real task data, so upgrades do not become intrusive.</li>
             <li>You can disable automatic onboarding and reopen it later manually whenever needed.</li>
         </ul>
@@ -833,7 +835,7 @@ def _build_help_html() -> str:
       </head>
       <body>
         <a id="home"></a>
-        <h1>CustomTaskManager Help</h1>
+        <h1>{APP_NAME} Help</h1>
         <p>This embedded guide explains workflows, features, shortcuts, and syntax in detail.</p>
         <h2>Index</h2>
         <ol>

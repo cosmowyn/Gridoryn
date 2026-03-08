@@ -21,7 +21,13 @@ from PySide6.QtWidgets import (
 )
 
 from app_paths import app_db_path, app_data_dir
-from app_metadata import APP_NAME, APP_ORGANIZATION, APP_VERSION, app_display_version
+from app_metadata import (
+    APP_NAME,
+    APP_STORAGE_NAME,
+    APP_STORAGE_ORGANIZATION,
+    APP_VERSION,
+    app_display_version,
+)
 from crash_logging import install_exception_hooks, log_event, log_exception
 from db import Database, DatabaseMigrationError
 from model import TaskTreeModel, STATUSES
@@ -117,6 +123,7 @@ class MainWindow(QMainWindow):
         self.workspace_db_path = str(self.workspace.get("db_path") or app_db_path())
         self.workspace_manager.ensure_workspace_state(self.workspace_id)
         self._workspace_switching = False
+        self._closing_down = False
         self._replacement_window: MainWindow | None = None
         self._floating_table_window: FloatingTaskTableWindow | None = None
         self.setDockNestingEnabled(True)
@@ -1487,7 +1494,15 @@ class MainWindow(QMainWindow):
         visible = self._is_task_table_visible()
         self._set_tree_visible(not visible)
 
+    def _db_available(self) -> bool:
+        if bool(getattr(self, "_closing_down", False)):
+            return False
+        db = getattr(self, "db", None)
+        return bool(db is not None and getattr(db, "conn", None) is not None)
+
     def _selected_task_details(self) -> dict | None:
+        if not self._db_available():
+            return None
         tid = self._selected_task_id()
         if tid is None:
             return None
@@ -1509,8 +1524,43 @@ class MainWindow(QMainWindow):
         self._active_task_label.setToolTip(text)
         self._active_task_label.setStatusTip(text)
 
+    def _clear_task_browser(self):
+        if not hasattr(self, "details_panel"):
+            return
+        self.details_panel.set_navigation_state(
+            parents=[],
+            current_parent_id=None,
+            current_parent_position=0,
+            current_parent_total=0,
+            current_item_position=0,
+            current_item_total=0,
+            can_prev_parent=False,
+            can_next_parent=False,
+            can_prev_child=False,
+            can_next_child=False,
+            tree_visible=bool(self._is_task_table_visible()),
+        )
+
+    def _clear_active_task_views(self):
+        self._active_task_details = None
+        self._active_task_id = None
+        self._update_active_task_status_label(None)
+        if hasattr(self, "details_panel"):
+            self.details_panel.set_task_details(None)
+        if hasattr(self, "project_panel"):
+            self.project_panel.set_project_choices([], None)
+            self.project_panel.set_dashboard(None)
+        if hasattr(self, "relationships_panel"):
+            self.relationships_panel.set_relationships(None)
+        if hasattr(self, "focus_panel"):
+            self.focus_panel.set_current_summary("Current selection: none", None)
+        self._clear_task_browser()
+
     def _refresh_relationships_panel_from_details(self, details: dict | None):
         if not hasattr(self, "relationships_panel"):
+            return
+        if not self._db_available():
+            self.relationships_panel.set_relationships(None)
             return
         if not details or details.get("id") is None:
             self.relationships_panel.set_relationships(None)
@@ -1520,6 +1570,10 @@ class MainWindow(QMainWindow):
 
     def _refresh_project_panel_from_details(self, details: dict | None):
         if not hasattr(self, "project_panel"):
+            return
+        if not self._db_available():
+            self.project_panel.set_project_choices([], None)
+            self.project_panel.set_dashboard(None)
             return
         current_project_id = (
             int(details["project_id"])
@@ -1541,6 +1595,9 @@ class MainWindow(QMainWindow):
         self.project_panel.set_dashboard(dashboard)
 
     def _refresh_active_task_views(self):
+        if not self._db_available():
+            self._clear_active_task_views()
+            return
         details = self._selected_task_details()
         self._active_task_details = details
         self._active_task_id = (
@@ -1822,6 +1879,9 @@ class MainWindow(QMainWindow):
     def _refresh_calendar_markers(self):
         if not hasattr(self, "calendar"):
             return
+        if not self._db_available():
+            self.calendar.set_completion_summary({})
+            return
         try:
             year = int(self.calendar.yearShown())
             month = int(self.calendar.monthShown())
@@ -1852,6 +1912,10 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "calendar_list"):
             return
         self.calendar_list.clear()
+        if not self._db_available():
+            if hasattr(self, "calendar_list_stack"):
+                self.calendar_list_stack.set_has_content(False)
+            return
         day_iso = self.calendar.selectedDate().toString("yyyy-MM-dd")
         for task in self.db.fetch_tasks_due_on(day_iso, include_archived=False):
             txt = f"[P{task.get('priority', '')}] {task.get('description', '')} ({task.get('status', '')})"
@@ -1936,6 +2000,9 @@ class MainWindow(QMainWindow):
         recent_days: int | None = None,
     ):
         if not hasattr(self, "review_panel"):
+            return
+        if not self._db_available():
+            self.review_panel.set_review_data({})
             return
         if waiting_days is None:
             waiting_days = int(self.review_panel.waiting_days.value())
@@ -2087,6 +2154,9 @@ class MainWindow(QMainWindow):
     def _refresh_focus_panel(self, include_waiting: bool | None = None):
         if not hasattr(self, "focus_panel"):
             return
+        if not self._db_available():
+            self.focus_panel.set_focus_data([], "Current selection: none", None)
+            return
         if hasattr(self, "focus_dock") and not self.focus_dock.isVisible():
             return
         if include_waiting is None:
@@ -2119,6 +2189,9 @@ class MainWindow(QMainWindow):
 
     def _refresh_analytics_panel(self, trend_days: int | None = None, tag_days: int | None = None):
         if not hasattr(self, "analytics_panel"):
+            return
+        if not self._db_available():
+            self.analytics_panel.set_analytics_data({})
             return
         if trend_days is None:
             trend_days = int(self.analytics_panel.trend_days.value())
@@ -2969,6 +3042,21 @@ class MainWindow(QMainWindow):
         if self._help_dialog is not None:
             self._help_dialog.open_anchor(anchor)
 
+    def _open_about_dialog(self):
+        QMessageBox.about(
+            self,
+            f"About {APP_NAME}",
+            (
+                f"<h3>{APP_NAME} {app_display_version()}</h3>"
+                "<p>Local-first personal task and project management for a "
+                "single desktop user.</p>"
+                "<p>No cloud sync, no accounts, no telemetry, and no required "
+                "online services.</p>"
+                f"<p><strong>Workspace data:</strong> {self._workspace_data_path()}</p>"
+                f"<p><strong>Current workspace:</strong> {self.workspace_name}</p>"
+            ),
+        )
+
     def _open_diagnostics_dialog(self):
         if self._diagnostics_dialog is None:
             self._diagnostics_dialog = DiagnosticsDialog(
@@ -3372,6 +3460,9 @@ class MainWindow(QMainWindow):
         help_act.setShortcut(QKeySequence(Qt.Key.Key_F1))
         help_act.triggered.connect(self._open_help_dialog)
 
+        about_act = QAction(f"About {APP_NAME}…", self)
+        about_act.triggered.connect(self._open_about_dialog)
+
         onboarding_act = QAction("Quick Start…", self)
         onboarding_act.triggered.connect(self._open_onboarding_dialog)
 
@@ -3573,6 +3664,8 @@ class MainWindow(QMainWindow):
         m_help.addAction(log_viewer_act)
         m_help.addAction(snapshot_history_act)
         m_help.addSeparator()
+        m_help.addAction(about_act)
+        m_help.addSeparator()
         m_help.addAction(toggle_tooltips_act)
 
         self.m_columns = menubar.addMenu("Columns")
@@ -3701,6 +3794,7 @@ class MainWindow(QMainWindow):
             (help_palette_act, "Jump straight to command palette help."),
             (help_templates_act, "Jump straight to template placeholder help."),
             (help_shortcuts_act, "Jump straight to keyboard shortcuts help."),
+            (about_act, f"Show version and product information for {APP_NAME}."),
             (diagnostics_act, "Inspect database health, restore-point availability, and repair options."),
             (log_viewer_act, "Open the application log viewer for crash entries and operation history."),
             (toggle_tooltips_act, "Turn interface tooltips on or off."),
@@ -4588,6 +4682,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._update_row_action_buttons)
 
     def closeEvent(self, event):
+        self._closing_down = True
         if not self._workspace_switching:
             self._save_ui_settings()
         s = self.model.settings
@@ -4624,8 +4719,9 @@ def main():
     try:
         log_event("Application startup requested", context="startup.begin", db_path=app_db_path())
         app = QApplication(sys.argv)
-        app.setOrganizationName(APP_ORGANIZATION)
-        app.setApplicationName(APP_NAME)
+        app.setOrganizationName(APP_STORAGE_ORGANIZATION)
+        app.setApplicationName(APP_STORAGE_NAME)
+        app.setApplicationDisplayName(APP_NAME)
         app.setApplicationVersion(APP_VERSION)
 
         workspace_manager = WorkspaceProfileManager()

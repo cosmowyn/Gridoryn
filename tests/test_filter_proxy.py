@@ -39,7 +39,8 @@ def test_filter_proxy_search_tags_and_perspectives(tmp_path, qapp):
     proxy.set_search_text("")
     proxy.set_perspective("inbox")
     inbox_rows = _visible_descriptions(proxy)
-    assert inbox_rows == ["Demo: Inbox - clarify travel reimbursement"]
+    assert "Demo: Inbox - clarify travel reimbursement" in inbox_rows
+    assert "Demo: Quick capture scratchpad" in inbox_rows
 
     proxy.set_perspective("all")
     proxy.set_tag_filter({"demo", "marketing"})

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to CustomTaskManager.
+Thanks for contributing to CustomToDo.
 
 ## Local Setup
 

@@ -1,105 +1,93 @@
-# CustomTaskManager
+# CustomToDo
 
-CustomTaskManager is a local-first desktop task manager built with Python 3, PySide6, and SQLite. It is designed around a hierarchical task tree, fast keyboard capture, explicit review workflows, and strong data safety features such as snapshots, diagnostics, logging, and migration validation.
+CustomToDo is a local-first desktop task and personal project management application built with Python, PySide6, and SQLite.
 
-Current app version: `v1.0.0`
+It combines a fast hierarchical task tree with review workflows, project cockpit planning, diagnostics, backups, and strong offline data ownership. It is designed for a single power user who wants serious planning capability without cloud accounts, team features, or a web backend.
 
-## Highlights
+Current stable version: `v1.0.0`
 
-### Core task management
+## Why CustomToDo
 
-- Hierarchical task tree with parent/child tasks, drag-and-drop ordering, row gutter action buttons, and persistent collapse state
-- Manual ordering plus alternate due-date, priority, and status sort modes without destroying saved manual order
-- Multi-selection, bulk edit, archive/restore, permanent delete, and undo/redo with visible history
-- Parent progress rollups and automatic parent completion when child progress reaches 100%
-- Project intelligence including next-action analysis, stalled/blocked reasoning, and workload summaries
+- Local-first: your data stays on your machine
+- Single-user by design: no accounts, sync, SaaS, or collaboration overhead
+- Fast keyboard workflow: quick add, quick capture, command palette, saved views
+- Serious project planning: phases, milestones, deliverables, baselines, dependencies, workload, and health
+- Trust-oriented operations: snapshots, diagnostics, repair previews, logging, and migration validation
 
-### Fast capture and keyboard workflow
+## Who It Is For
 
-- Quick-add bar with natural parsing for dates and priorities
-- Inline capture directives such as tags, buckets, and child/parent targeting
-- Lightweight quick-capture dialog and tray/menu-bar capture entry
-- Command palette for navigation and actions such as views, templates, backups, diagnostics, and workspace switching
-- Platform-aware shortcut labels and behavior for macOS and Windows
+CustomToDo is for:
+- solo operators managing complex personal or client-facing work
+- power users who want hierarchy, review, and project clarity in one desktop app
+- people who prefer explicit local control over cloud task managers
 
-### Planning, review, and visibility
+CustomToDo is not for:
+- team collaboration
+- cloud sync or multi-device coordination through a hosted service
+- enterprise workflow management
+- users who want a simple checklist app with minimal planning detail
 
+## Feature Overview
+
+### Core work management
+- Hierarchical task tree with parent/child work, drag-and-drop ordering, archive/restore, and undo/redo
 - Built-in perspectives: All, Today, Upcoming, Inbox, Someday, and Completed / Archive
-- Advanced search syntax and filter dock
-- Saved filter views
-- Project cockpit for charters, phases, milestones, deliverables, baselines, and structured project registers
-- Lightweight project timeline / Gantt-style planning for dated tasks, milestones, and deliverables
-- Guided review workflow for overdue, inbox, stalled, waiting, recurring, and archive review
-- Focus mode for short actionable work lists
-- Calendar / agenda view with due-date activity markers
-- Analytics dashboard with completion trends, workload warnings, and scheduling hints
-- Relationship inspector for dependencies, dependents, same-tag tasks, and same-project context
+- Search, filters, saved views, and dense keyboard-first navigation
+- Custom columns with typed editors, including dates and editable lists
+- Notes, tags, reminders, attachments, recurrence, effort, actual time, and waiting context
 
-### Task details and metadata
-
-- Notes, tags, waiting context, dependencies, recurrence, effort estimates, actual time, and timer support
-- Start dates and project phases for timeline-friendly task planning
-- Attachments to files and folders
-- Local reminders with grouped reminder popups, snoozing, reminder modes, and reminder history flags
-- Custom columns with typed editors, including date pickers and editable list values
-- Reusable templates with placeholder variables
-
-### Personal project management
-
-- Project charter/definition fields for objective, scope, out-of-scope, owner, stakeholders, target date, success criteria, summary/background, category, and health override
-- Default and per-project phases for intake, planning, execution, testing, approval, and closure
-- First-class milestones with dependencies, progress, target dates, baseline dates, linked tasks, and completion state
-- First-class deliverables with due date, acceptance criteria, version/reference, linked work, and lifecycle status
+### Project management
+- Project cockpit with project charter/definition fields
+- Project phases for intake, planning, execution, testing, approval, and closure
+- Milestones, deliverables, baselines, and variance tracking
 - Structured risk, issue, assumption, and decision registers
-- Baseline target-date and effort tracking with current-versus-baseline variance
-- Personal workload summaries by day/week with overcommitment warnings
-- Hybrid project health logic combining manual override with inferred signals from blockers, overdue work, inactivity, and scope drift cues
+- Timeline / Gantt-style planning for tasks, milestones, and deliverables
+- Health indicators, blockers, workload pressure, and next-action support
 
-### Safety, diagnostics, and portability
+### Review and visibility
+- Guided review workflow for overdue, waiting, stalled, archive, and PM-specific review categories
+- Focus mode for short actionable work lists
+- Relationship inspector for dependencies, same-project context, and related tasks
+- Calendar / agenda view
+- Analytics dashboard for completion trends and workload warnings
 
-- SQLite schema versioning with migration validation and pre-migration backups
-- Backup export/import plus automatic versioned restore-point snapshots
-- Snapshot history viewer with safe restore-to-copy and restore-to-workspace flows
-- Crash logging and labeled operation logging for troubleshooting
-- In-app application log viewer
-- Diagnostics panel with integrity checks and repair preview/repair tools
-- Theme editor plus theme import/export
-- Workspace profiles for multiple databases with separate UI state restoration
-
-### Onboarding and discoverability
-
-- Embedded help system with indexed chapters, search, internal links, and platform-aware shortcut text
-- Quick Start / welcome flow
-- Optional demo data in the current empty workspace
-- Optional separate demo workspace for safe exploration
-
-## Platform Support
-
-- Primary supported desktop targets: macOS and Windows
-- Linux development and headless test execution are supported in practice, but packaging is primarily tuned for macOS and Windows
+### Safety and operations
+- SQLite schema migrations with validation and pre-migration backup behavior
+- Versioned restore-point snapshots
+- Backup export/import and theme export/import
+- Diagnostics and repair preview flows
+- Crash logging, operation logging, and in-app log viewer
+- Workspace profiles for multiple local databases
 
 ## Screenshots
 
-Screenshots can be added here later. Suggested captures:
+### Main workspace
 
-- main task tree with details/review/calendar docks
-- quick-capture dialog
-- command palette
-- diagnostics panel
-- snapshot history and workspace manager
+![Main workspace](docs/screenshots/main-workspace.png)
+
+### Project cockpit timeline
+
+![Project cockpit timeline](docs/screenshots/project-cockpit-timeline.png)
+
+### Review workflow
+
+![Review workflow](docs/screenshots/review-workflow.png)
+
+### Relationship inspector
+
+![Relationship inspector](docs/screenshots/relationship-inspector.png)
 
 ## Quick Start
 
 ### Requirements
-
 - Python 3.11 or newer
 - `pip`
-- A local virtual environment is recommended
+- a local virtual environment is recommended
 
-### Clone and install
+### Install
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/cosmowyn/CustomToDo.git
 cd CustomToDo
 python3 -m venv .venv
 source .venv/bin/activate
@@ -116,104 +104,101 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Run the app
+### Run
 
 ```bash
 python main.py
 ```
 
-The application stores its SQLite database and supporting files in the per-user application data directory managed by Qt. No admin rights are required.
-
-### First launch
-
-On first launch, the app can show a Quick Start dialog that helps you:
-
-- start with an empty database
-- load demo data into an empty workspace
+On first launch, CustomToDo can open a Quick Start dialog that lets you:
+- start with an empty workspace
+- load a full showcase demo into an empty workspace
 - open a separate demo workspace
-- open the embedded help
-- jump into the review workflow
+- jump into the embedded guide
+- open the review workflow immediately
 
-## Daily Workflow Summary
+## Daily Workflow
 
-Typical usage flow:
+A typical flow looks like this:
 
-1. Capture tasks with Quick add, Quick capture, or the command palette
-2. Organize tasks in the tree, details panel, and built-in perspectives
-3. Review the system with Filters, Saved Views, Focus mode, and Review Workflow
-4. Use the Project cockpit for charters, phases, milestones, deliverables, registers, timeline planning, and workload
-5. Inspect project health through next-action, stalled, relationship, and analytics views
-6. Protect data through snapshots, backups, diagnostics, and the application log
+1. Capture with Quick add, Quick capture, or the command palette
+2. Organize tasks in the tree, details panel, and perspectives
+3. Use saved views, focus mode, and review workflow to stay current
+4. Manage project outcomes in the Project cockpit
+5. Use diagnostics, snapshots, and logs when you need trust and recovery
 
-## Data, Safety, and Storage
+## Local Data and Safety
 
-The app is local-first. Important user data stays in the per-user Qt application data location, including:
+CustomToDo is local-first. User data stays in the per-user application data location managed by Qt.
 
-- primary SQLite database
-- workspace-specific backup snapshots
-- migration backups
-- crash and operation logs
-- persistent settings and themes
+Stored locally:
+- the primary SQLite database
+- workspace-specific restore points
+- logs
+- persistent UI state and settings
+- themes
 
-Safety features currently included:
-
+Included safety features:
 - schema validation on open
-- migration error reporting
-- pre-migration SQLite backup
-- integrity diagnostics and repair preview
-- automatic restore-point snapshots with rotation
-- snapshot restore into a separate database copy or separate workspace
-- in-app log viewing for failures and high-risk operations
-- defensive validation for project phases, milestones, deliverables, register entries, and dependency references
+- migration validation and clear failure reporting
+- restore-point snapshots with rotation
+- diagnostics and repair preview tools
+- backup export/import
+- application log viewing for failures and high-risk operations
 
-## Backup and Theme Portability
+## Demo Workspace
 
-The app includes both data and theme portability:
+The built-in demo now functions as a real showcase workspace rather than a tiny sample list. It includes:
+- four populated projects
+- dense timelines and dependencies
+- milestones and deliverables
+- risk/issue/assumption/decision registers
+- reminders and recurrence
+- saved views and templates
+- attachments, archive data, and workload pressure examples
 
-- `File > Backup > Export Data…`
-- `File > Backup > Import Data…`
-- `File > Backup > Export Themes…`
-- `File > Backup > Import Themes…`
-- `File > Backup > Create snapshot now`
-- `View > Application log…`
-- `Tools > Snapshot history…`
+The demo uses fictionalized data only.
 
-Exports, snapshots, logs, and restored copies are user files and should generally not be committed to source control.
+## Build and Packaging
 
-## Build / Package
+The stable local build helper is [buildfile.py](buildfile.py).
 
-The repository includes an interactive PyInstaller helper and a spec file:
+### Build
 
 ```bash
 pip install -r requirements-dev.txt
 python buildfile.py
 ```
 
-Notes:
+The build helper:
+- reads the stable app name and version from [app_metadata.py](app_metadata.py)
+- uses stable local icon/splash assets automatically when they are present
+- supports optional asset overrides through `CUSTOMTODO_ICON` and `CUSTOMTODO_SPLASH`
+- builds a PyInstaller desktop artifact
+- stages a versioned release copy under `dist/release/`
+- writes `dist/release_manifest.json`
 
-- The build helper expects the virtual environment directory to be named `.venv`
-- `CustomTaskManager.spec` is included for PyInstaller-based packaging
-- On Windows, the build helper can use an `.ico` app icon
-- On macOS, the helper can generate `.icns` assets via `sips` and `iconutil`
-- Build assets live under `build_assets/`
-- Build outputs are written to `dist/`
+### Packaging notes
+- the stable repo includes a tracked macOS `.icns` icon asset
+- macOS icon conversion is handled through `sips` and `iconutil` when needed
+- Windows builds can supply a `.ico` through `CUSTOMTODO_ICON`
+- local/private signing material is intentionally excluded from the stable branch and release flow
+- the stable PyInstaller spec file is [CustomToDo.spec](CustomToDo.spec)
+
+### Release checklist
+- [docs/release-checklist.md](docs/release-checklist.md)
 
 ## Testing
 
-The repository includes an automated `pytest` suite covering critical application logic, including:
-
-- database creation, migrations, recurrence persistence, integrity checks, and restore-point helpers
-- project-management entities, dependency validation, baseline variance, timeline generation, and workload summaries
-- tree model behavior, ordering, undo/redo behavior, filtering, and project intelligence logic
-- backup import/export and theme import/export
-- quick-add parsing, capture parsing, templates, workspace profiles, and demo data generation
-- crash logging and diagnostics helpers
-
-Install development dependencies first:
-
-```bash
-pip install -r requirements-dev.txt
-```
+The repository includes an automated `pytest` suite covering:
+- schema creation and migrations
+- backup/import/export
+- project-management entities and validation
+- filtering and views
+- demo data generation
+- help routing
+- selection synchronization
+- diagnostics, restore points, and logging
 
 Run the full suite:
 
@@ -221,106 +206,33 @@ Run the full suite:
 python -m pytest -q
 ```
 
-Optional validation:
+Optional syntax check:
 
 ```bash
 python -m py_compile *.py tests/*.py
 ```
 
-For a lightweight headless UI smoke check:
-
-```bash
-QT_QPA_PLATFORM=offscreen python - <<'PY'
-from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QSettings
-from settings_ui import SettingsDialog
-
-app = QApplication([])
-dlg = SettingsDialog(QSettings("FocusTools", "CustomTaskManager"))
-print("UI smoke ok")
-PY
-```
-
 ## Project Structure
 
-The project is larger than a single-window app now. The main groups are:
-
 ```text
-main.py                   Main window, menus, dock orchestration, startup flow
-db.py                     SQLite schema, migrations, diagnostics, and persistence
-model.py                  Tree model, business logic, and undo-aware operations
-commands.py               QUndoCommand implementations
-
-app_metadata.py           App name/version/profile metadata
-app_paths.py              Cross-platform app-data and resource paths
-platform_utils.py         OS detection and platform-aware shortcut helpers
-crash_logging.py          Crash logging and structured operation logging
-
-backup_io.py              Backup export/import flows
-auto_backup.py            Versioned restore-point snapshot creation and rotation
-theme.py                  Theme definitions and application
-theme_io.py               Theme import/export
-diagnostics.py            Diagnostics report generation
-demo_data.py              Demo dataset and demo workspace generation
-
-query_parsing.py          Search and quick-add parsing helpers
-capture_parsing.py        Capture intent parsing
-capture_actions.py        Capture intent execution routing
-filter_proxy.py           Tree filtering and perspectives
-project_intelligence.py   Next-action, stalled, blocked, and workload analysis
-project_management.py     Project-management logic helpers and summary/timeline calculations
-workflow_assist.py        Review and workflow acknowledgement helpers
-template_params.py        Template placeholder parsing and substitution
-
-calendar_widgets.py       Calendar widgets and agenda helpers
-delegates.py              Tree/editor delegates, typed editors, reminder editors
-time_picker_ui.py         Reusable radial time picker
-columns_ui.py             Custom column dialogs
-settings_ui.py            Settings and theme editor
-details_panel.py          Details editor dock
-filters_ui.py             Filter dock
-review_ui.py              Review workflow dock
-focus_ui.py               Focus mode dock
-analytics_ui.py           Analytics dashboard dock
-project_cockpit_ui.py     Project cockpit dock for charters, phases, milestones, deliverables, registers, and timeline
-relationships_ui.py       Relationship inspector dock
-diagnostics_ui.py         Diagnostics dialog
-log_viewer_ui.py          In-app application log viewer
-command_palette.py        Command palette dialog
-quick_capture_ui.py       Lightweight capture dialog
-archive_ui.py             Archive browser / restore dialog
-snapshot_history_ui.py    Snapshot history and restore dialog
-workspace_profiles.py     Workspace registry and persistence
-workspace_ui.py           Workspace manager dialog
-welcome_ui.py             Quick Start / onboarding dialog
-help_ui.py                Embedded help system
-reminders_ui.py           Reminder batch dialog
-template_vars_ui.py       Template placeholder prompt
-
-buildfile.py              Interactive PyInstaller build helper
-CustomTaskManager.spec    PyInstaller spec
-build_assets/             Packaging and build assets
-tests/                    Pytest suite
+main.py                     Main window and workspace orchestration
+db.py                       SQLite schema, migrations, diagnostics, and persistence
+model.py                    Tree model and undo-aware operations
+project_cockpit_ui.py       Project cockpit UI
+project_management.py       PM calculations and timeline/workload logic
+relationships_ui.py         Relationship inspector
+review_ui.py                Guided review workflow
+focus_ui.py                 Focus-mode panel
+help_ui.py                  Embedded help system
+backup_io.py                Backup import/export
+auto_backup.py              Restore-point snapshots
+crash_logging.py            Crash and operation logging
+demo_data.py                Showcase demo workspace generation
+workspace_profiles.py       Multi-workspace local profile handling
+buildfile.py                Local build helper
+CustomToDo.spec             Stable PyInstaller spec
 ```
 
-## Development Notes
+## License
 
-- The codebase is intentionally desktop-first and local-first
-- SQLite is used directly rather than through an ORM
-- UI behavior is split into focused modules instead of one monolithic window file
-- Diagnostics, logging, and snapshots are treated as first-class app features rather than afterthoughts
-- Packaging is oriented toward standalone desktop distribution rather than PyPI library packaging
-- Global quick-capture hotkey support is optional and depends on `qhotkey` being available in the runtime environment
-
-## License and Disclaimer
-
-This project is licensed under the PolyForm Noncommercial License 1.0.0 with copyright held by **Mervyn van de Kleut**. Commercial resale and other commercial use are not permitted under that license.
-
-Important:
-
-- This repository is **not** released under MIT
-- MIT allows commercial use, which conflicts with the stated requirement for this project
-- Because commercial use is restricted, this repository is source-available but not open source in the strict OSI-approved sense
-- The software is provided at your own risk and without warranty
-
-See [LICENSE.txt](LICENSE.txt) for the full license text and required notice.
+This project is licensed under the PolyForm Noncommercial License 1.0.0 with copyright held by **Mervyn van de Kleut**. Commercial resale and other commercial use are not permitted.

@@ -59,3 +59,26 @@ def test_project_cockpit_has_compact_default_size_hints(qapp):
     assert panel.milestones_table.maximumHeight() <= 300
     assert panel.deliverables_table.maximumHeight() <= 300
     assert panel.register_table.maximumHeight() <= 300
+
+
+def test_project_cockpit_status_labels_wrap_inside_summary_form(qapp):
+    panel = ProjectCockpitPanel()
+
+    assert (
+        panel.status_summary_layout.rowWrapPolicy()
+        == panel.status_summary_layout.RowWrapPolicy.WrapLongRows
+    )
+    for label in (
+        panel.lbl_health,
+        panel.lbl_next_milestone,
+        panel.lbl_blockers,
+        panel.lbl_due_soon,
+        panel.lbl_effort,
+        panel.lbl_variance,
+    ):
+        assert label.wordWrap() is True
+        assert label.minimumWidth() == 0
+        assert (
+            label.alignment()
+            & (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        ) == (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
