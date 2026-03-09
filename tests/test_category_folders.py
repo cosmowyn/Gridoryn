@@ -106,3 +106,37 @@ def test_category_folders_group_tree_and_filter_project_cockpit(tmp_path, qapp, 
     finally:
         window.close()
         qapp.processEvents()
+
+
+def test_move_task_with_category_folders_present_does_not_crash(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        root_folder_id = window.model.create_category_folder("Operations")
+        assert root_folder_id is not None
+
+        assert window.model.add_task_with_values("Task A")
+        task_a_id = int(window.model.last_added_task_id())
+        assert window.model.add_task_with_values("Task B")
+        task_b_id = int(window.model.last_added_task_id())
+
+        qapp.processEvents()
+
+        assert window.model.move_task_relative(task_b_id, -1) is True
+        qapp.processEvents()
+
+        moved_node = window.model.node_for_id(task_b_id)
+        assert moved_node is not None
+        assert moved_node.task is not None
+        assert int(moved_node.task["sort_order"]) == 1
+
+        other_node = window.model.node_for_id(task_a_id)
+        assert other_node is not None
+        assert other_node.task is not None
+        assert int(other_node.task["sort_order"]) == 2
+    finally:
+        window.close()
+        qapp.processEvents()

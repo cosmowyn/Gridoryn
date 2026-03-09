@@ -2085,10 +2085,19 @@ class TaskTreeModel(QAbstractItemModel):
             new_parent_order=new_order,
         )
 
-        for i, ch in enumerate(old_parent_node.children, start=1):
-            ch.task["sort_order"] = i
-        for i, ch in enumerate(new_parent_node.children, start=1):
-            ch.task["sort_order"] = i
+        old_sort_order = 1
+        for ch in old_parent_node.children:
+            if not ch.task:
+                continue
+            ch.task["sort_order"] = old_sort_order
+            old_sort_order += 1
+
+        new_sort_order = 1
+        for ch in new_parent_node.children:
+            if not ch.task:
+                continue
+            ch.task["sort_order"] = new_sort_order
+            new_sort_order += 1
             if int(ch.task["id"]) == task_id:
                 ch.task["parent_id"] = new_parent_id
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QImage, QPainter
-from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOptionViewItem
 
 import main as main_module
 from main import MainWindow
@@ -24,6 +24,15 @@ def _build_window(tmp_path, qapp, monkeypatch):
     window.show()
     qapp.processEvents()
     return window
+
+
+def _rightmost_visible_section(window):
+    header = window.view.header()
+    visible = [i for i in range(header.count()) if not window.view.isColumnHidden(i)]
+    return max(
+        visible,
+        key=lambda logical: header.sectionPosition(logical) + header.sectionSize(logical),
+    )
 
 
 def test_task_table_toggle_and_side_panel_browsing(tmp_path, qapp, monkeypatch):
@@ -271,7 +280,7 @@ def test_custom_columns_expand_horizontal_scroll_range_without_manual_resize(
 
         header = window.view.header()
         scrollbar = window.view.horizontalScrollBar()
-        last_section = header.count() - 1
+        last_section = _rightmost_visible_section(window)
         scrollbar.setValue(scrollbar.maximum())
         qapp.processEvents()
         assert (
@@ -288,6 +297,7 @@ def test_custom_columns_expand_horizontal_scroll_range_without_manual_resize(
         actual_max = int(window.view.horizontalScrollBar().maximum())
         assert actual_max == expected_max
 
+        last_section = _rightmost_visible_section(window)
         scrollbar.setValue(scrollbar.maximum())
         qapp.processEvents()
         assert (
@@ -346,13 +356,203 @@ def test_restored_header_state_keeps_far_right_columns_reachable(
         assert actual_max == expected_max
 
         header = window.view.header()
-        last_section = header.count() - 1
+        last_section = _rightmost_visible_section(window)
         window.view.horizontalScrollBar().setValue(window.view.horizontalScrollBar().maximum())
         qapp.processEvents()
         assert (
             header.sectionViewportPosition(last_section)
             + header.sectionSize(last_section)
             <= window.view.viewport().width()
+        )
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_restored_header_state_disables_stretch_last_section(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    seed_window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        seed_window._set_tree_visible(True, show_message=False)
+        qapp.processEvents()
+        assert seed_window.model.add_task_with_values("Stretch Restore Test")
+        qapp.processEvents()
+        for name in (
+            "Impact score",
+            "Owner rating",
+            "Risk band",
+            "Client note",
+            "Region",
+            "Stage note",
+            "Extra 1",
+            "Extra 2",
+        ):
+            seed_window.model.add_custom_column(name, "text")
+        qapp.processEvents()
+        qapp.processEvents()
+
+        header = seed_window.view.header()
+        header.setStretchLastSection(True)
+        header.setSectionResizeMode(header.count() - 1, QHeaderView.ResizeMode.Interactive)
+        QSettings().setValue("ui/header_state", header.saveState())
+        QSettings().sync()
+    finally:
+        seed_window.close()
+        qapp.processEvents()
+
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        window._set_tree_visible(True, show_message=False)
+        qapp.processEvents()
+
+        header = window.view.header()
+        assert header.stretchLastSection() is False
+        assert all(
+            header.sectionResizeMode(i) == QHeaderView.ResizeMode.Interactive
+            for i in range(header.count())
+        )
+
+        window.view.horizontalScrollBar().setValue(window.view.horizontalScrollBar().maximum())
+        qapp.processEvents()
+        last_section = _rightmost_visible_section(window)
+        assert (
+            header.sectionViewportPosition(last_section)
+            + header.sectionSize(last_section)
+            <= window.view.viewport().width()
+        )
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_columns_menu_lists_custom_columns(tmp_path, qapp, monkeypatch):
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        window.model.add_custom_column("Impact score", "text")
+        window.model.add_custom_column("Owner rating", "text")
+        qapp.processEvents()
+        qapp.processEvents()
+
+        window._rebuild_columns_menu()
+        action_texts = [a.text() for a in window.m_columns.actions()]
+
+        assert "Add custom column…" in action_texts
+        assert "Remove custom column…" in action_texts
+        assert "Impact score" in action_texts
+        assert "Owner rating" in action_texts
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_moved_header_state_keeps_rightmost_visible_column_reachable(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    seed_window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        seed_window._set_tree_visible(True, show_message=False)
+        qapp.processEvents()
+        assert seed_window.model.add_task_with_values("Moved Header Test")
+        qapp.processEvents()
+        for name in (
+            "Impact score",
+            "Owner rating",
+            "Risk band",
+            "Client note",
+            "Region",
+            "Stage note",
+            "Extra 1",
+            "Extra 2",
+        ):
+            seed_window.model.add_custom_column(name, "text")
+        qapp.processEvents()
+        qapp.processEvents()
+
+        header = seed_window.view.header()
+        visual_last = header.visualIndex(header.count() - 1)
+        description_visual = header.visualIndex(0)
+        header.moveSection(description_visual, visual_last)
+        qapp.processEvents()
+
+        QSettings().setValue("ui/header_state", header.saveState())
+        QSettings().sync()
+    finally:
+        seed_window.close()
+        qapp.processEvents()
+
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        window._set_tree_visible(True, show_message=False)
+        qapp.processEvents()
+
+        expected_max = window._expected_task_header_scroll_maximum()
+        actual_max = int(window.view.horizontalScrollBar().maximum())
+        assert actual_max == expected_max
+
+        header = window.view.header()
+        rightmost = _rightmost_visible_section(window)
+        window.view.horizontalScrollBar().setValue(window.view.horizontalScrollBar().maximum())
+        qapp.processEvents()
+        assert (
+            header.sectionViewportPosition(rightmost)
+            + header.sectionSize(rightmost)
+            <= window.view.viewport().width()
+        )
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_showing_rightmost_column_while_scrolled_to_end_keeps_end_visible(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        window._set_tree_visible(True, show_message=False)
+        qapp.processEvents()
+        assert window.model.add_task_with_values("Show Column Test")
+        qapp.processEvents()
+        for name in (
+            "Impact score",
+            "Owner rating",
+            "Risk band",
+            "Client note",
+            "Region",
+            "Stage note",
+            "Extra 1",
+            "Extra 2",
+        ):
+            window.model.add_custom_column(name, "text")
+        qapp.processEvents()
+        qapp.processEvents()
+
+        header = window.view.header()
+        scrollbar = window.view.horizontalScrollBar()
+        rightmost = _rightmost_visible_section(window)
+
+        scrollbar.setValue(scrollbar.maximum())
+        qapp.processEvents()
+        window.view.setColumnHidden(rightmost, True)
+        qapp.processEvents()
+        qapp.processEvents()
+
+        window.view.setColumnHidden(rightmost, False)
+        qapp.processEvents()
+        qapp.processEvents()
+
+        rightmost = _rightmost_visible_section(window)
+        assert scrollbar.value() == scrollbar.maximum()
+        assert (
+            header.sectionViewportPosition(rightmost)
+            + header.sectionSize(rightmost)
+            <= header.viewport().width()
         )
     finally:
         window.close()

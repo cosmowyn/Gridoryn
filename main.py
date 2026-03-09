@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QDockWidget, QLabel, QToolButton, QComboBox, QInputDialog,
     QFileDialog, QListWidget, QListWidgetItem, QUndoView, QScrollArea,
     QSystemTrayIcon,
-    QGridLayout, QGroupBox, QSizePolicy, QLayout
+    QGridLayout, QGroupBox, QSizePolicy, QLayout, QHeaderView
 )
 
 from app_paths import app_db_path, app_data_dir
@@ -4485,6 +4485,8 @@ class MainWindow(QMainWindow):
                 def _toggle(checked: bool):
                     self.view.setColumnHidden(col_index, not checked)
                     self.model.settings.setValue(f"columns/hidden/{col_key}", not checked)
+                    self._schedule_task_header_layout()
+                    self._schedule_task_header_scroll_sync()
                     self._schedule_row_action_button_update()
                 return _toggle
 
@@ -5400,6 +5402,13 @@ class MainWindow(QMainWindow):
             if w is not None:
                 self.view.setColumnWidth(logical, int(w))
 
+    def _normalize_task_header_behavior(self):
+        header = self.view.header()
+        header.setStretchLastSection(False)
+        for logical in range(self.proxy.columnCount()):
+            if header.sectionResizeMode(logical) != QHeaderView.ResizeMode.Interactive:
+                header.setSectionResizeMode(logical, QHeaderView.ResizeMode.Interactive)
+
     def _minimum_header_width_for_column(self, logical: int) -> int:
         header = self.view.header()
         title = str(
@@ -5449,15 +5458,37 @@ class MainWindow(QMainWindow):
             int(self.view.width()),
             int(header.width()),
             int(header.count()),
-            int(header.length()),
+            int(self._task_header_content_width()),
             self.view.font().toString(),
             tuple(bool(self.view.isColumnHidden(i)) for i in range(self.proxy.columnCount())),
         )
 
-    def _expected_task_header_scroll_maximum(self) -> int:
+    def _rightmost_visible_header_section(self) -> int | None:
         header = self.view.header()
-        viewport_width = max(0, int(self.view.viewport().width()))
-        return max(0, int(header.length()) - viewport_width)
+        rightmost_logical = None
+        rightmost_edge = -1
+        for logical in range(self.proxy.columnCount()):
+            if self.view.isColumnHidden(logical):
+                continue
+            edge = int(header.sectionPosition(logical)) + int(header.sectionSize(logical))
+            if edge > rightmost_edge:
+                rightmost_edge = edge
+                rightmost_logical = logical
+        return rightmost_logical
+
+    def _task_header_content_width(self) -> int:
+        header = self.view.header()
+        rightmost_visible_logical = self._rightmost_visible_header_section()
+        if rightmost_visible_logical is None:
+            return 0
+        right_edge = int(header.sectionPosition(rightmost_visible_logical)) + int(
+            header.sectionSize(rightmost_visible_logical)
+        )
+        return max(0, right_edge)
+
+    def _expected_task_header_scroll_maximum(self) -> int:
+        viewport_width = max(0, int(self.view.header().viewport().width()))
+        return max(0, int(self._task_header_content_width()) - viewport_width)
 
     def _task_header_scroll_range_is_stale(self) -> bool:
         if not hasattr(self, "view") or self.view.model() is None:
@@ -5484,8 +5515,19 @@ class MainWindow(QMainWindow):
         if not self._is_task_table_visible():
             self._task_header_scroll_sync_attempts = 0
             return
+        self._normalize_task_header_behavior()
+        bar = self.view.horizontalScrollBar()
+        was_at_end = int(bar.maximum()) > 0 and int(bar.value()) >= int(bar.maximum()) - 1
         self.view.updateGeometries()
         self.view.header().updateGeometry()
+        expected_maximum = self._expected_task_header_scroll_maximum()
+        bar.setPageStep(max(0, int(self.view.header().viewport().width())))
+        if int(bar.maximum()) < expected_maximum:
+            bar.setRange(0, expected_maximum)
+        if was_at_end:
+            bar.setValue(bar.maximum())
+        elif int(bar.value()) > expected_maximum:
+            bar.setValue(expected_maximum)
         self.view.header().viewport().update()
         self.view.viewport().update()
         if self._task_header_scroll_range_is_stale() and self._task_header_scroll_sync_attempts < 2:
@@ -5508,6 +5550,7 @@ class MainWindow(QMainWindow):
             if not force and (self.view.width() <= 0 or header.width() <= 0):
                 self._schedule_task_header_layout(force=force)
                 return
+            self._normalize_task_header_behavior()
             signature = self._task_header_layout_signature_for_current_state()
             repaired = self._repair_task_header_section_widths()
             range_stale = self._task_header_scroll_range_is_stale()

@@ -1598,7 +1598,10 @@ class ProjectCockpitPanel(QWidget):
         self.register_table.setRowCount(0)
         self.register_meta.setText("0 register entries")
         self.register_stack.set_has_content(False)
-        self.timeline_widget.set_dashboard(None)
+        try:
+            self.timeline_widget.set_dashboard(None)
+        except RuntimeError:
+            pass
         self.timeline_summary.setText("Timeline needs dated tasks, milestones, or deliverables.")
         self.timeline_stack.set_has_content(False)
         self.day_table.setRowCount(0)
