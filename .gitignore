@@ -76,3 +76,4 @@ restored_tasks.sqlite3
 # Local environment files
 .env
 .env.*
+CustomToDo.spec

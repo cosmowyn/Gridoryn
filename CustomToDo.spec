@@ -1,17 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from pathlib import Path
-
-from app_metadata import APP_NAME
-
-
-project_root = Path(__file__).resolve().parent
-icon_path = project_root / "build_assets" / "icons" / f"{APP_NAME}.icns"
-icon_args = [str(icon_path)] if icon_path.exists() else []
-
 
 a = Analysis(
-    [str(project_root / "main.py")],
+    ['/Users/cosmowyn/Projects/CustomToDo/main.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -30,7 +21,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name=APP_NAME,
+    name='CustomToDo',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -41,7 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=icon_args,
+    icon=['/Users/cosmowyn/Projects/CustomToDo/build_assets/icons/CustomToDo.icns'],
 )
 coll = COLLECT(
     exe,
@@ -50,11 +41,11 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name=APP_NAME,
+    name='CustomToDo',
 )
 app = BUNDLE(
     coll,
-    name=f"{APP_NAME}.app",
-    icon=str(icon_path) if icon_path.exists() else None,
+    name='CustomToDo.app',
+    icon='/Users/cosmowyn/Projects/CustomToDo/build_assets/icons/CustomToDo.icns',
     bundle_identifier=None,
 )
