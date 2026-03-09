@@ -174,6 +174,7 @@ class TaskTreeModel(QAbstractItemModel):
 
         if reset_header_state:
             self.settings.remove("ui/header_state")
+            self.settings.remove("ui/header_state_keys")
 
     def _rebuild_project_health_cache(self, tasks: list[dict] | None = None):
         rows = tasks if tasks is not None else self.db.fetch_tasks()

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOptionViewItem
 
 import main as main_module
+from db import Database
 from main import MainWindow
 from workspace_profiles import WorkspaceProfileManager
 
@@ -549,6 +550,162 @@ def test_showing_rightmost_column_while_scrolled_to_end_keeps_end_visible(
 
         rightmost = _rightmost_visible_section(window)
         assert scrollbar.value() == scrollbar.maximum()
+        assert (
+            header.sectionViewportPosition(rightmost)
+            + header.sectionSize(rightmost)
+            <= header.viewport().width()
+        )
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_startup_restore_shows_scrollbar_when_enabled_columns_exceed_viewport(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    seed_window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        seed_window._set_tree_visible(True, show_message=False)
+        qapp.processEvents()
+        assert seed_window.model.add_task_with_values("Startup Restore Test")
+        qapp.processEvents()
+        for name in (
+            "Impact score",
+            "Owner rating",
+            "Risk band",
+            "Client note",
+            "Region",
+            "Stage note",
+            "Extra 1",
+            "Extra 2",
+            "Extra 3",
+        ):
+            seed_window.model.add_custom_column(name, "text")
+        qapp.processEvents()
+        qapp.processEvents()
+        seed_window._save_ui_settings()
+    finally:
+        seed_window.close()
+        qapp.processEvents()
+
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        qapp.processEvents()
+        qapp.processEvents()
+        window._rebuild_columns_menu()
+        checked_titles = {
+            action.text()
+            for action in window.m_columns.actions()
+            if action.isCheckable() and action.isChecked()
+        }
+        visible_titles = {
+            str(window.proxy.headerData(i, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole))
+            for i in range(window.proxy.columnCount())
+            if not window.view.isColumnHidden(i)
+        }
+
+        assert checked_titles == visible_titles
+        assert window.view.horizontalScrollBar().maximum() == window._expected_task_header_scroll_maximum()
+        assert window.view.horizontalScrollBar().maximum() > 0
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_stale_builtin_only_header_state_does_not_hide_custom_columns_at_startup(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    seed_window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        seed_window._set_tree_visible(True, show_message=False)
+        qapp.processEvents()
+        builtin_only_state = seed_window.view.header().saveState()
+        builtin_only_keys = [
+            seed_window.model.column_key(i)
+            for i in range(seed_window.proxy.columnCount())
+        ]
+        QSettings().setValue("ui/header_state", builtin_only_state)
+        QSettings().setValue("ui/header_state_keys", builtin_only_keys)
+        QSettings().sync()
+    finally:
+        seed_window.close()
+        qapp.processEvents()
+
+    db = Database(str(tmp_path / "task-browser.sqlite3"))
+    try:
+        for name in (
+            "Impact score",
+            "Owner rating",
+            "Risk band",
+            "Client note",
+        ):
+            db.add_custom_column(name, "text")
+    finally:
+        db.close()
+
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        qapp.processEvents()
+        qapp.processEvents()
+        header = window.view.header()
+        custom_titles = {"Impact score", "Owner rating", "Risk band", "Client note"}
+        live_titles = {
+            str(window.proxy.headerData(i, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole))
+            for i in range(window.proxy.columnCount())
+            if not window.view.isColumnHidden(i)
+        }
+        assert custom_titles.issubset(live_titles)
+        for i in range(window.proxy.columnCount()):
+            title = str(window.proxy.headerData(i, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole))
+            if title in custom_titles:
+                assert header.sectionSize(i) > 0
+        assert window.view.horizontalScrollBar().maximum() == window._expected_task_header_scroll_maximum()
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_scroll_sync_repairs_oversized_scroll_range_without_manual_resize(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        window._set_tree_visible(True, show_message=False)
+        qapp.processEvents()
+        assert window.model.add_task_with_values("Scroll Range Repair Test")
+        qapp.processEvents()
+        for name in (
+            "Impact score",
+            "Owner rating",
+            "Risk band",
+            "Client note",
+            "Region",
+            "Stage note",
+            "Extra 1",
+            "Extra 2",
+        ):
+            window.model.add_custom_column(name, "text")
+        qapp.processEvents()
+        qapp.processEvents()
+
+        scrollbar = window.view.horizontalScrollBar()
+        expected_max = window._expected_task_header_scroll_maximum()
+        scrollbar.setRange(0, expected_max + 200)
+        scrollbar.setValue(scrollbar.maximum())
+        qapp.processEvents()
+
+        window._flush_task_header_scroll_sync()
+        qapp.processEvents()
+
+        assert scrollbar.maximum() == expected_max
+        rightmost = _rightmost_visible_section(window)
+        header = window.view.header()
         assert (
             header.sectionViewportPosition(rightmost)
             + header.sectionSize(rightmost)

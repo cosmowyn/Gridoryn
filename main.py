@@ -530,6 +530,7 @@ class MainWindow(QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         self._apply_task_header_layout(force=True)
+        self._schedule_task_header_scroll_sync()
         self._schedule_row_action_button_update()
         try:
             import pyi_splash  # type: ignore
@@ -2958,6 +2959,7 @@ class MainWindow(QMainWindow):
         s.setValue("ui/geometry", self.saveGeometry())
         s.setValue("ui/window_state", self.saveState())
         s.setValue("ui/header_state", self.view.header().saveState())
+        s.setValue("ui/header_state_keys", self._current_task_header_state_keys())
         s.setValue("ui/controls_dock_visible", self.controls_dock.isVisible())
         s.setValue("ui/tree_visible", self._is_task_table_visible())
         s.setValue("ui/tree_floating", self._is_task_table_floating())
@@ -5463,6 +5465,9 @@ class MainWindow(QMainWindow):
             tuple(bool(self.view.isColumnHidden(i)) for i in range(self.proxy.columnCount())),
         )
 
+    def _current_task_header_state_keys(self) -> list[str]:
+        return [self.model.column_key(i) for i in range(self.proxy.columnCount())]
+
     def _rightmost_visible_header_section(self) -> int | None:
         header = self.view.header()
         rightmost_logical = None
@@ -5522,7 +5527,7 @@ class MainWindow(QMainWindow):
         self.view.header().updateGeometry()
         expected_maximum = self._expected_task_header_scroll_maximum()
         bar.setPageStep(max(0, int(self.view.header().viewport().width())))
-        if int(bar.maximum()) < expected_maximum:
+        if int(bar.maximum()) != expected_maximum:
             bar.setRange(0, expected_maximum)
         if was_at_end:
             bar.setValue(bar.maximum())
@@ -5592,8 +5597,12 @@ class MainWindow(QMainWindow):
             self.restoreState(win_state)
 
         header_state = s.value("ui/header_state")
+        saved_header_keys = s.value("ui/header_state_keys", [])
+        if isinstance(saved_header_keys, str):
+            saved_header_keys = [saved_header_keys]
+        current_header_keys = self._current_task_header_state_keys()
         restored_header = False
-        if header_state is not None:
+        if header_state is not None and list(saved_header_keys or []) == current_header_keys:
             try:
                 restored_header = bool(self.view.header().restoreState(header_state))
             except Exception:
