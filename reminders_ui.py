@@ -19,6 +19,7 @@ from ui_layout import (
     add_left_aligned_buttons,
     configure_box_layout,
     configure_form_layout,
+    polish_button_layouts,
 )
 
 
@@ -77,6 +78,7 @@ class ReminderBatchDialog(QDialog):
         self.ack_btn.clicked.connect(self._acknowledge)
         self.snooze_btn.clicked.connect(self._snooze)
         self.close_btn.clicked.connect(self.reject)
+        polish_button_layouts(self)
 
     def _acknowledge(self):
         self._action = self.ACTION_ACK

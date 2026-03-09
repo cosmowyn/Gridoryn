@@ -87,6 +87,7 @@ from ui_layout import (
     SectionPanel,
     configure_box_layout,
     configure_grid_layout,
+    polish_button_layouts,
 )
 from ui_perf import measure_ui
 
@@ -448,6 +449,7 @@ class MainWindow(QMainWindow):
         self._init_status_bar()
         self._apply_widget_tooltips()
         self._apply_accessibility_metadata()
+        polish_button_layouts(self)
         self._restore_ui_settings()
         tooltips_enabled = self.model.settings.value("ui/tooltips_enabled", True, type=bool)
         self._set_tooltips_enabled(bool(tooltips_enabled), show_message=False)
@@ -1288,6 +1290,7 @@ class MainWindow(QMainWindow):
         )
 
     def _wrap_dock_content_scrollable(self, content: QWidget, object_name: str) -> QScrollArea:
+        polish_button_layouts(content)
         layout = content.layout()
         if layout is not None:
             layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)

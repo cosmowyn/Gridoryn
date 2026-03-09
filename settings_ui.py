@@ -18,6 +18,7 @@ from ui_layout import (
     configure_box_layout,
     configure_form_layout,
     configure_grid_layout,
+    polish_button_layouts,
 )
 
 
@@ -145,6 +146,7 @@ class SettingsDialog(QDialog):
         add_left_aligned_buttons(bottom, ok, cancel)
         root.addLayout(bottom)
 
+        polish_button_layouts(self)
         self._load_theme_into_controls()
 
     def _add_section_widget(

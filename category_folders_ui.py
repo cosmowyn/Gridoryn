@@ -22,6 +22,7 @@ from ui_layout import (
     add_left_aligned_buttons,
     configure_box_layout,
     configure_form_layout,
+    polish_button_layouts,
 )
 
 
@@ -156,6 +157,7 @@ class CategoryFolderDialog(QDialog):
         self.save_btn.clicked.connect(self.accept)
         self.cancel_btn.clicked.connect(self.reject)
 
+        polish_button_layouts(self)
         self._update_preview()
 
     def _pick_color(self):

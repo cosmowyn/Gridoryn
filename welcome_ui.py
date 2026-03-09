@@ -19,7 +19,11 @@ from PySide6.QtWidgets import (
 from app_metadata import APP_NAME
 from context_help import create_context_help_header
 from platform_utils import shortcut_display_text
-from ui_layout import add_left_aligned_buttons, configure_box_layout
+from ui_layout import (
+    add_left_aligned_buttons,
+    configure_box_layout,
+    polish_button_layouts,
+)
 
 
 class WelcomeDialog(QDialog):
@@ -126,6 +130,7 @@ class WelcomeDialog(QDialog):
         self.help_btn.clicked.connect(lambda: self._finish(self.ACTION_HELP))
         self.review_btn.clicked.connect(lambda: self._finish(self.ACTION_REVIEW))
         self.cancel_btn.clicked.connect(self.reject)
+        polish_button_layouts(self)
 
     def _build_screenshot_panel(self) -> QWidget | None:
         screenshot_specs = [

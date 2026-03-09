@@ -30,6 +30,7 @@ from ui_layout import (
     configure_box_layout,
     configure_form_layout,
     configure_grid_layout,
+    polish_button_layouts,
 )
 
 
@@ -283,6 +284,7 @@ class TaskDetailsPanel(QWidget):
         self.toggle_table_btn.clicked.connect(self.toggleTableRequested.emit)
         self.parent_jump.currentIndexChanged.connect(self._emit_parent_jump)
         self._install_auto_save_hooks()
+        polish_button_layouts(self)
 
     def sizeHint(self) -> QSize:
         return QSize(520, 640)

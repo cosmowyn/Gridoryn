@@ -18,6 +18,7 @@ from ui_layout import (
     SectionPanel,
     add_left_aligned_buttons,
     configure_box_layout,
+    polish_button_layouts,
 )
 
 
@@ -108,6 +109,7 @@ class FocusPanel(QWidget):
         self.focus_btn.clicked.connect(self._emit_focus)
         self.details_btn.clicked.connect(self._emit_open_details)
         self.close_btn.clicked.connect(self.closeRequested.emit)
+        polish_button_layouts(self)
 
     def sizeHint(self) -> QSize:
         return QSize(440, 520)

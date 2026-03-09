@@ -24,6 +24,7 @@ from ui_layout import (
     add_left_aligned_buttons,
     configure_box_layout,
     configure_form_layout,
+    polish_button_layouts,
 )
 
 
@@ -100,6 +101,7 @@ class TemplateVariablesDialog(QDialog):
 
         if variables:
             self._edits[variables[0]].setFocus()
+        polish_button_layouts(self)
 
     def values(self) -> dict[str, str]:
         out = {}

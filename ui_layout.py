@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QFormLayout,
     QFrame,
     QGridLayout,
     QHeaderView,
     QHBoxLayout,
+    QLayout,
     QLabel,
+    QPushButton,
     QStackedLayout,
     QTableWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -20,6 +24,11 @@ DEFAULT_PANEL_MARGINS = (8, 8, 8, 8)
 DEFAULT_SPACING = 8
 DEFAULT_LABEL_WIDTH = 140
 DEFAULT_BUTTON_MIN_WIDTH = 112
+DEFAULT_BUTTON_MIN_HEIGHT = 28
+DEFAULT_COMPACT_BUTTON_MIN_SIZE = 22
+DEFAULT_BUTTON_TEXT_PADDING = 24
+DEFAULT_BUTTON_ICON_GAP = 8
+MIN_BUTTON_ROW_SPACING = 2
 DEFAULT_SECTION_SPACING = 6
 
 
@@ -79,18 +88,124 @@ def add_left_aligned_buttons(
     trailing_stretch: bool = True,
 ):
     configure_box_layout(layout)
+    layout.setSpacing(max(layout.spacing(), MIN_BUTTON_ROW_SPACING))
     layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     for btn in buttons:
         if btn is None:
             continue
-        try:
-            btn.setMinimumWidth(DEFAULT_BUTTON_MIN_WIDTH)
-        except Exception:
-            pass
+        apply_button_layout_policy(btn)
         layout.addWidget(btn)
     if trailing_stretch:
         layout.addStretch(1)
     return layout
+
+
+def _button_text(button: QAbstractButton) -> str:
+    try:
+        return str(button.text() or "").replace("&", "").strip()
+    except Exception:
+        return ""
+
+
+def button_minimum_size(
+    button: QAbstractButton,
+    *,
+    extra_padding: int = DEFAULT_BUTTON_TEXT_PADDING,
+) -> QSize:
+    text = _button_text(button)
+    metrics = button.fontMetrics()
+    hint = button.sizeHint()
+    try:
+        icon = button.icon()
+        has_icon = bool(icon and not icon.isNull())
+    except Exception:
+        has_icon = False
+    try:
+        icon_width = int(button.iconSize().width()) if has_icon else 0
+    except Exception:
+        icon_width = 0
+    icon_width = max(icon_width, 16) if has_icon else 0
+
+    if text:
+        width = metrics.horizontalAdvance(text) + int(extra_padding)
+        if has_icon:
+            width += icon_width + DEFAULT_BUTTON_ICON_GAP
+        width = max(width, hint.width(), DEFAULT_BUTTON_MIN_WIDTH)
+        height = max(
+            hint.height(),
+            metrics.height() + 12,
+            DEFAULT_BUTTON_MIN_HEIGHT,
+        )
+    else:
+        compact_min = max(DEFAULT_COMPACT_BUTTON_MIN_SIZE, icon_width + 10)
+        width = max(hint.width(), compact_min)
+        height = max(hint.height(), compact_min)
+        if isinstance(button, QToolButton):
+            height = max(height, DEFAULT_COMPACT_BUTTON_MIN_SIZE)
+    return QSize(int(width), int(height))
+
+
+def apply_button_layout_policy(
+    button: QAbstractButton,
+    *,
+    extra_padding: int = DEFAULT_BUTTON_TEXT_PADDING,
+):
+    minimum = button_minimum_size(button, extra_padding=extra_padding)
+    try:
+        button.setMinimumWidth(max(button.minimumWidth(), minimum.width()))
+    except Exception:
+        pass
+    try:
+        button.setMinimumHeight(max(button.minimumHeight(), minimum.height()))
+    except Exception:
+        pass
+    return button
+
+
+def _layout_button_count(layout: QLayout) -> int:
+    count = 0
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        if item is None:
+            continue
+        widget = item.widget()
+        child_layout = item.layout()
+        if isinstance(widget, QAbstractButton):
+            count += 1
+        elif child_layout is not None:
+            count += _layout_button_count(child_layout)
+    return count
+
+
+def _apply_button_spacing(layout: QLayout):
+    if _layout_button_count(layout) >= 2:
+        if isinstance(layout, QGridLayout):
+            layout.setHorizontalSpacing(
+                max(layout.horizontalSpacing(), MIN_BUTTON_ROW_SPACING)
+            )
+            layout.setVerticalSpacing(
+                max(layout.verticalSpacing(), MIN_BUTTON_ROW_SPACING)
+            )
+        else:
+            layout.setSpacing(max(layout.spacing(), MIN_BUTTON_ROW_SPACING))
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        if item is None:
+            continue
+        child_layout = item.layout()
+        if child_layout is not None:
+            _apply_button_spacing(child_layout)
+
+
+def polish_button_layouts(root: QWidget):
+    if root is None:
+        return root
+    layout = root.layout()
+    if layout is not None:
+        _apply_button_spacing(layout)
+    for button in root.findChildren(QAbstractButton):
+        apply_button_layout_policy(button)
+    return root
 
 
 class SectionPanel(QFrame):

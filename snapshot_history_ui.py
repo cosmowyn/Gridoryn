@@ -27,6 +27,7 @@ from ui_layout import (
     SectionPanel,
     add_left_aligned_buttons,
     configure_box_layout,
+    polish_button_layouts,
 )
 from workspace_profiles import WorkspaceProfileManager
 
@@ -117,6 +118,7 @@ class SnapshotHistoryDialog(QDialog):
         self.delete_btn.clicked.connect(self._delete_snapshot)
         self.close_btn.clicked.connect(self.reject)
 
+        polish_button_layouts(self)
         self.refresh()
 
     def switch_workspace_id(self) -> str | None:

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from app_metadata import APP_NAME
 from platform_utils import shortcut_display_text
+from ui_layout import polish_button_layouts
 
 
 def _sc(value: str | QKeySequence.StandardKey) -> str:
@@ -947,6 +948,7 @@ class HelpDialog(QDialog):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([280, 760])
 
+        polish_button_layouts(self)
         self._populate_index()
         self.browser.scrollToAnchor("home")
 

@@ -27,6 +27,7 @@ from ui_layout import (
     add_left_aligned_buttons,
     configure_box_layout,
     configure_form_layout,
+    polish_button_layouts,
 )
 from workspace_profiles import WorkspaceProfileManager
 
@@ -120,6 +121,7 @@ class WorkspaceManagerDialog(QDialog):
         self.reveal_btn.clicked.connect(self._reveal_workspace_path)
         self.close_btn.clicked.connect(self.reject)
 
+        polish_button_layouts(self)
         self.refresh()
 
     def refresh(self):

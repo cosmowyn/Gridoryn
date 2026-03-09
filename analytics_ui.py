@@ -24,6 +24,7 @@ from ui_layout import (
     add_left_aligned_buttons,
     configure_box_layout,
     configure_form_layout,
+    polish_button_layouts,
 )
 
 
@@ -172,6 +173,7 @@ class AnalyticsPanel(QWidget):
         bottom_split.addWidget(hints_panel)
 
         self.refresh_btn.clicked.connect(self._emit_refresh)
+        polish_button_layouts(self)
 
     def sizeHint(self) -> QSize:
         return QSize(520, 560)

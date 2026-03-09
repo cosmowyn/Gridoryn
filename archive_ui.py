@@ -25,6 +25,7 @@ from ui_layout import (
     configure_data_table,
     configure_box_layout,
     configure_form_layout,
+    polish_button_layouts,
 )
 
 
@@ -118,6 +119,7 @@ class ArchiveBrowserDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
         self.table.itemDoubleClicked.connect(lambda *_: self._accept_if_selection())
 
+        polish_button_layouts(self)
         self._rebuild()
 
     def _matches(self, row: dict, q: str) -> bool:

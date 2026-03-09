@@ -10,7 +10,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ui_layout import DEFAULT_DIALOG_MARGINS, add_left_aligned_buttons, configure_box_layout
+from ui_layout import (
+    DEFAULT_DIALOG_MARGINS,
+    add_left_aligned_buttons,
+    configure_box_layout,
+    polish_button_layouts,
+)
 
 
 class QuickCaptureDialog(QDialog):
@@ -54,6 +59,7 @@ class QuickCaptureDialog(QDialog):
         self.capture_btn.clicked.connect(self._emit_capture)
         self.show_app_btn.clicked.connect(self.revealRequested.emit)
         self.close_btn.clicked.connect(self.hide)
+        polish_button_layouts(self)
 
     def _emit_capture(self):
         text = self.input.text().strip()

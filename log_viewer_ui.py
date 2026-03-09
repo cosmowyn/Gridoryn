@@ -25,6 +25,7 @@ from ui_layout import (
     SectionPanel,
     add_left_aligned_buttons,
     configure_box_layout,
+    polish_button_layouts,
 )
 
 
@@ -99,6 +100,7 @@ class LogViewerDialog(QDialog):
         self.open_folder_btn.clicked.connect(self._open_logs_folder)
         self.close_btn.clicked.connect(self.accept)
 
+        polish_button_layouts(self)
         self.refresh()
 
     def refresh(self):

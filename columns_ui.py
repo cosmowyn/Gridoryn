@@ -14,6 +14,7 @@ from ui_layout import (
     configure_box_layout,
     configure_form_layout,
     form_label,
+    polish_button_layouts,
 )
 
 
@@ -64,6 +65,7 @@ class AddColumnDialog(QDialog):
         cancel.clicked.connect(self.reject)
         add_left_aligned_buttons(btns, ok, cancel)
         section.body_layout.addLayout(btns)
+        polish_button_layouts(self)
 
     def _update_type_ui(self, col_type: str):
         is_list = str(col_type) == "list"
@@ -129,6 +131,7 @@ class RemoveColumnDialog(QDialog):
         self.ok.setEnabled(bool(columns))
         add_left_aligned_buttons(btns, self.ok, cancel)
         section.body_layout.addLayout(btns)
+        polish_button_layouts(self)
 
     def selected_column_id(self):
         it = self.list.currentItem()

@@ -22,6 +22,7 @@ from ui_layout import (
     add_left_aligned_buttons,
     configure_box_layout,
     configure_form_layout,
+    polish_button_layouts,
 )
 
 
@@ -80,6 +81,7 @@ class CommandPaletteDialog(QDialog):
         self.list.itemActivated.connect(lambda *_: self._accept_if_has_selection())
         self.list.itemDoubleClicked.connect(lambda *_: self._accept_if_has_selection())
 
+        polish_button_layouts(self)
         self._rebuild()
         self.search.setFocus()
 

@@ -19,7 +19,13 @@ from PySide6.QtWidgets import (
 from auto_backup import create_versioned_backup
 from crash_logging import log_event, log_exception
 from diagnostics import build_diagnostics_report
-from ui_layout import add_form_row, add_left_aligned_buttons, configure_box_layout, configure_form_layout
+from ui_layout import (
+    add_form_row,
+    add_left_aligned_buttons,
+    configure_box_layout,
+    configure_form_layout,
+    polish_button_layouts,
+)
 
 
 class DiagnosticsDialog(QDialog):
@@ -115,6 +121,7 @@ class DiagnosticsDialog(QDialog):
         self.open_workspace_btn.clicked.connect(lambda: self._open_path(self.lbl_workspace.text()))
         self.close_btn.clicked.connect(self.accept)
 
+        polish_button_layouts(self)
         self.refresh_report()
 
     def refresh_report(self):

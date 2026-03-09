@@ -53,6 +53,7 @@ from ui_layout import (
     configure_box_layout,
     configure_data_table,
     configure_form_layout,
+    polish_button_layouts,
 )
 
 
@@ -121,6 +122,7 @@ class DependencyPickerDialog(QDialog):
 
         self.ok_btn.clicked.connect(self.accept)
         self.cancel_btn.clicked.connect(self.reject)
+        polish_button_layouts(self)
 
     def selected_refs(self) -> list[dict]:
         refs: list[dict] = []
@@ -232,6 +234,7 @@ class MilestoneDialog(QDialog):
         self.dep_btn.clicked.connect(self._choose_dependencies)
         self.ok_btn.clicked.connect(self.accept)
         self.cancel_btn.clicked.connect(self.reject)
+        polish_button_layouts(self)
         self.status_combo.currentIndexChanged.connect(self._sync_completion_defaults)
 
         if payload:
@@ -366,6 +369,7 @@ class DeliverableDialog(QDialog):
 
         self.ok_btn.clicked.connect(self.accept)
         self.cancel_btn.clicked.connect(self.reject)
+        polish_button_layouts(self)
 
         if payload:
             self._apply_payload(payload)
@@ -472,6 +476,7 @@ class RegisterEntryDialog(QDialog):
 
         self.ok_btn.clicked.connect(self.accept)
         self.cancel_btn.clicked.connect(self.reject)
+        polish_button_layouts(self)
 
         if payload:
             self._apply_payload(payload)
@@ -624,6 +629,7 @@ class ProjectCockpitPanel(QWidget):
         )
         self.project_combo.currentIndexChanged.connect(self._emit_project_change)
         self.tabs.currentChanged.connect(self._on_current_tab_changed)
+        polish_button_layouts(self)
 
     def focus_target(self) -> QWidget | None:
         tab_name = str(self.tabs.tabText(self.tabs.currentIndex()) or "").strip().lower()

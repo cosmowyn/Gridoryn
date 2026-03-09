@@ -23,6 +23,7 @@ from ui_layout import (
     add_left_aligned_buttons,
     configure_box_layout,
     configure_form_layout,
+    polish_button_layouts,
 )
 
 
@@ -190,6 +191,7 @@ class ReviewWorkflowPanel(QWidget):
         self.restore_btn.clicked.connect(lambda: self.restoreRequested.emit(self.selected_task_ids()))
         self.clear_ack_btn.clicked.connect(lambda: self.clearAcknowledgedRequested.emit(self.current_category()))
         self.tabs.currentChanged.connect(lambda _index: self._update_action_states())
+        polish_button_layouts(self)
         self._update_action_states()
 
     def sizeHint(self) -> QSize:
