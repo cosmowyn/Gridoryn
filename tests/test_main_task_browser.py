@@ -151,3 +151,31 @@ def test_refresh_views_after_db_close_does_not_crash(tmp_path, qapp, monkeypatch
             window.db.close()
         window.close()
         qapp.processEvents()
+
+
+def test_task_header_repairs_tiny_saved_section_widths(tmp_path, qapp, monkeypatch):
+    seed_window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        header = seed_window.view.header()
+        for logical in range(min(4, seed_window.proxy.columnCount())):
+            if not seed_window.view.isColumnHidden(logical):
+                header.resizeSection(logical, 24)
+        QSettings().setValue("ui/header_state", header.saveState())
+        QSettings().sync()
+    finally:
+        seed_window.close()
+        qapp.processEvents()
+
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        header = window.view.header()
+        for logical in range(min(4, window.proxy.columnCount())):
+            if window.view.isColumnHidden(logical):
+                continue
+            assert (
+                header.sectionSize(logical)
+                >= window._minimum_header_width_for_column(logical)
+            )
+    finally:
+        window.close()
+        qapp.processEvents()

@@ -315,6 +315,10 @@ class PlannerGraphicsView(QGraphicsView):
             return
         super().mouseDoubleClickEvent(event)
 
+    def scrollContentsBy(self, dx: int, dy: int):
+        super().scrollContentsBy(dx, dy)
+        self.owner.handle_view_scrolled(int(dx), int(dy))
+
 
 class TimelineHeaderWidget(QWidget):
     def __init__(self, parent=None):
@@ -1088,6 +1092,10 @@ class ProjectGanttView(QWidget):
         self._dependency_rebuild_timer = QTimer(self)
         self._dependency_rebuild_timer.setSingleShot(True)
         self._dependency_rebuild_timer.timeout.connect(self._flush_dependency_rebuild)
+        self._scroll_repaint_pending = False
+        self._scroll_repaint_timer = QTimer(self)
+        self._scroll_repaint_timer.setSingleShot(True)
+        self._scroll_repaint_timer.timeout.connect(self._flush_scroll_repaint)
 
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(0, 0, 0, 0), spacing=6)
@@ -1206,6 +1214,7 @@ class ProjectGanttView(QWidget):
         self.scene = PlannerScene(self)
         self.view = PlannerGraphicsView(self, self.scene)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self.view.setCacheMode(QGraphicsView.CacheModeFlag.CacheNone)
         self.view.setViewportUpdateMode(
             QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate
         )
@@ -1358,6 +1367,8 @@ class ProjectGanttView(QWidget):
     def _rebuild_chart(self):
         self._dependency_rebuild_pending = False
         self._dependency_rebuild_timer.stop()
+        self._scroll_repaint_pending = False
+        self._scroll_repaint_timer.stop()
         self.visible_rows = []
         self.bar_items = {}
         self.connector_items = []
@@ -1569,6 +1580,34 @@ class ProjectGanttView(QWidget):
             return
         self._dependency_rebuild_pending = False
         self._rebuild_dependency_paths()
+
+    def _visible_scene_rect(self) -> QRectF:
+        if self.scene.sceneRect().isNull() or self.scene.sceneRect().isEmpty():
+            return QRectF()
+        rect = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
+        return rect.intersected(self.scene.sceneRect())
+
+    def _schedule_scroll_repaint(self):
+        self._scroll_repaint_pending = True
+        if not self._scroll_repaint_timer.isActive():
+            self._scroll_repaint_timer.start(0)
+
+    def _flush_scroll_repaint(self):
+        if not self._scroll_repaint_pending:
+            return
+        self._scroll_repaint_pending = False
+        rect = self._visible_scene_rect()
+        if rect.isNull() or rect.isEmpty():
+            return
+        self._invalidate_scene_layers(
+            QGraphicsScene.SceneLayer.AllLayers,
+            rect.adjusted(-16.0, -8.0, 16.0, 8.0),
+        )
+
+    def handle_view_scrolled(self, dx: int, dy: int):
+        if dx == 0 and dy == 0:
+            return
+        self._schedule_scroll_repaint()
 
     def _invalidate_scene_layers(
         self,

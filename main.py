@@ -213,6 +213,7 @@ class MainWindow(QMainWindow):
         hdr = self.view.header()
         hdr.setSectionsMovable(True)
         hdr.setStretchLastSection(False)
+        self._task_header_layout_pending = False
 
         self.view.setRootIsDecorated(True)
         self.view.setItemsExpandable(True)
@@ -412,6 +413,7 @@ class MainWindow(QMainWindow):
         self.view.header().geometriesChanged.connect(lambda: self._update_row_action_buttons())
         self.view.viewport().installEventFilter(self)
         self.view.installEventFilter(self)
+        self.view.header().installEventFilter(self)
 
         self._init_controls_dock()
         # Advanced filter panel (dock)
@@ -443,6 +445,8 @@ class MainWindow(QMainWindow):
         self.model.modelReset.connect(self._refresh_analytics_panel)
         self.model.modelReset.connect(self._refresh_active_task_views)
         self.proxy.modelReset.connect(self._refresh_active_task_views)
+        self.model.modelReset.connect(self._schedule_task_header_layout)
+        self.proxy.modelReset.connect(self._schedule_task_header_layout)
         self.model.dataChanged.connect(lambda *_: self._refresh_calendar_markers())
         self.model.dataChanged.connect(lambda *_: self._refresh_focus_panel())
         self.model.dataChanged.connect(lambda *_: self._refresh_active_task_views())
@@ -483,6 +487,7 @@ class MainWindow(QMainWindow):
         self.addAction(focus_quick_add)
 
         QTimer.singleShot(0, self._update_row_action_buttons)
+        QTimer.singleShot(0, self._schedule_task_header_layout)
         QTimer.singleShot(0, self._refresh_active_task_views)
         QTimer.singleShot(0, self._maybe_show_onboarding)
 
@@ -508,6 +513,16 @@ class MainWindow(QMainWindow):
         if hasattr(self, "view") and obj in (self.view.viewport(), self.view):
             if event.type() in (QEvent.Type.Resize, QEvent.Type.Wheel, QEvent.Type.Move, QEvent.Type.Show):
                 QTimer.singleShot(0, self._update_row_action_buttons)
+        if hasattr(self, "view") and obj in (self.view, self.view.header()):
+            if event.type() in (
+                QEvent.Type.Show,
+                QEvent.Type.Resize,
+                QEvent.Type.FontChange,
+                QEvent.Type.StyleChange,
+                QEvent.Type.LayoutRequest,
+                QEvent.Type.PolishRequest,
+            ):
+                self._schedule_task_header_layout()
         if hasattr(self, "view") and obj == self.view.viewport():
             if event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
                 md = event.mimeData()
@@ -1428,6 +1443,8 @@ class MainWindow(QMainWindow):
         self._update_task_table_placeholder()
         self.model.settings.setValue("ui/tree_floating", want_floating)
         self._refresh_task_browser()
+        if not want_floating and bool(show_after):
+            self._schedule_task_header_layout()
         QTimer.singleShot(0, self._update_row_action_buttons)
 
     def _show_controls_dock(self):
@@ -1621,6 +1638,8 @@ class MainWindow(QMainWindow):
         self.model.settings.setValue("ui/tree_visible", show_tree)
         self._refresh_task_browser()
         self._update_task_table_placeholder()
+        if show_tree:
+            self._schedule_task_header_layout()
         QTimer.singleShot(0, self._update_row_action_buttons)
 
     def _toggle_task_table_visibility(self):
@@ -5144,6 +5163,69 @@ class MainWindow(QMainWindow):
             if w is not None:
                 self.view.setColumnWidth(logical, int(w))
 
+    def _minimum_header_width_for_column(self, logical: int) -> int:
+        header = self.view.header()
+        title = str(
+            self.proxy.headerData(
+                logical,
+                Qt.Orientation.Horizontal,
+                Qt.ItemDataRole.DisplayRole,
+            )
+            or self.model.headerData(
+                logical,
+                Qt.Orientation.Horizontal,
+                Qt.ItemDataRole.DisplayRole,
+            )
+            or ""
+        )
+        metrics = header.fontMetrics()
+        content_width = metrics.horizontalAdvance(title) + 28
+        minimums = {
+            "description": 180,
+            "next_action": 160,
+            "project_state": 120,
+            "project_health": 120,
+            "status": 100,
+            "progress": 100,
+            "reminder_at": 140,
+            "last_update": 140,
+        }
+        key = self.model.column_key(logical)
+        return max(minimums.get(key, 72), content_width)
+
+    def _repair_task_header_section_widths(self):
+        header = self.view.header()
+        for logical in range(self.proxy.columnCount()):
+            if self.view.isColumnHidden(logical):
+                continue
+            current_width = header.sectionSize(logical)
+            minimum_width = self._minimum_header_width_for_column(logical)
+            if current_width < minimum_width:
+                header.resizeSection(logical, int(minimum_width))
+
+    def _apply_task_header_layout(self):
+        if not hasattr(self, "view") or self.view.model() is None:
+            return
+        header = self.view.header()
+        if header.count() <= 0:
+            return
+        self.view.updateGeometries()
+        header.updateGeometry()
+        self.view.doItemsLayout()
+        self._repair_task_header_section_widths()
+        header.viewport().update()
+        self.view.viewport().update()
+
+    def _schedule_task_header_layout(self):
+        if self._task_header_layout_pending:
+            return
+        self._task_header_layout_pending = True
+        QTimer.singleShot(0, self._flush_task_header_layout)
+
+    def _flush_task_header_layout(self):
+        self._task_header_layout_pending = False
+        self._apply_task_header_layout()
+
     # ---------- Restore / save UI state ----------
     def _restore_ui_settings(self):
         s = self.model.settings
@@ -5170,6 +5252,8 @@ class MainWindow(QMainWindow):
             key = self.model.column_key(logical)
             hidden = s.value(f"columns/hidden/{key}", False, type=bool)
             self.view.setColumnHidden(logical, bool(hidden))
+
+        self._schedule_task_header_layout()
 
         controls_visible = s.value("ui/controls_dock_visible", True, type=bool)
         self.controls_dock.setVisible(bool(controls_visible))

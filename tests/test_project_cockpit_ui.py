@@ -446,6 +446,7 @@ def test_gantt_view_uses_bounding_rect_viewport_updates_for_line_stability(qapp)
         widget.view.viewportUpdateMode()
         == widget.view.ViewportUpdateMode.BoundingRectViewportUpdate
     )
+    assert widget.view.cacheMode() == widget.view.CacheModeFlag.CacheNone
 
 
 def test_gantt_view_zoom_rebuild_invalidates_all_scene_layers(qapp):
@@ -465,6 +466,26 @@ def test_gantt_view_zoom_rebuild_invalidates_all_scene_layers(qapp):
         and call.args[1] == widget.scene.SceneLayer.AllLayers
         for call in invalidate_mock.call_args_list
     )
+
+
+def test_gantt_view_scroll_coalesces_visible_region_repaint(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+    widget.show()
+    qapp.processEvents()
+
+    with patch.object(widget, "_invalidate_scene_layers") as invalidate_mock:
+        widget.handle_view_scrolled(42, 0)
+        widget.handle_view_scrolled(18, 0)
+        assert invalidate_mock.call_count == 0
+        qapp.processEvents()
+
+    assert invalidate_mock.call_count == 1
+    assert invalidate_mock.call_args.args[0] == widget.scene.SceneLayer.AllLayers
+    dirty_rect = invalidate_mock.call_args.args[1]
+    assert dirty_rect.width() > 0
+    assert dirty_rect.height() > 0
 
 
 def test_gantt_view_commit_move_emits_schedule_edit(qapp):
