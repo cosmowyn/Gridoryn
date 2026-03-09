@@ -67,6 +67,22 @@ def _save_widget(widget, path: Path) -> None:
     widget.grab().save(str(path))
 
 
+def _prepare_main_workspace_capture(window: MainWindow) -> None:
+    window._set_task_table_floating(False, show_after=True)
+    window._set_tree_visible(True, show_message=False)
+    window.controls_dock.show()
+    window.details_dock.hide()
+    window.project_dock.hide()
+    window.relationships_dock.hide()
+    window.review_dock.hide()
+    window.analytics_dock.hide()
+    window.calendar_dock.hide()
+    window.focus_dock.hide()
+    window.resize(1580, 980)
+    window.view.setColumnWidth(0, 520)
+    window.view.setColumnWidth(1, 150)
+
+
 def main() -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -83,11 +99,14 @@ def main() -> int:
         window.show()
         app.processEvents()
 
+        _prepare_main_workspace_capture(window)
         _focus_description(window, "Finalize landing page copy")
         app.processEvents()
         _save_widget(window, out_dir / "main-workspace.png")
 
         _focus_description(window, LAUNCH_PROJECT_NAME)
+        window.details_dock.show()
+        window.project_dock.show()
         window.project_panel.tabs.setCurrentIndex(4)
         app.processEvents()
         _save_widget(window.project_panel, out_dir / "project-cockpit-timeline.png")

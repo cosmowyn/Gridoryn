@@ -31,6 +31,7 @@ Gridoryn is not for:
 
 ### Core work management
 - Hierarchical task tree with parent/child work, drag-and-drop ordering, archive/restore, and undo/redo
+- Compact first-cell status strip in the task tree keeps task state scanable without repaint-heavy full-row fills
 - Category folders for grouping top-level tasks and projects without turning the folder itself into a task
 - Built-in perspectives: All, Today, Upcoming, Inbox, Someday, and Completed / Archive
 - Search, filters, saved views, and dense keyboard-first navigation
@@ -65,6 +66,8 @@ Gridoryn is not for:
 ### Main workspace
 
 ![Main workspace](docs/screenshots/main-workspace.png)
+
+The main workspace screenshot reflects the current task-tree rendering: task state is carried by a compact leading strip in the first visible cell, while the rest of the row stays neutral for readability and lower repaint cost.
 
 ### Project cockpit timeline
 
