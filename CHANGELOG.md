@@ -6,6 +6,8 @@ The format is inspired by Keep a Changelog and uses straightforward dated entrie
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-03-09
+
 ### Added
 
 - A production-oriented personal project management layer with project charters, phases, milestones, deliverables, structured risk/issue/assumption/decision registers, baselines, dependency validation, and a project cockpit dock
@@ -17,7 +19,7 @@ The format is inspired by Keep a Changelog and uses straightforward dated entrie
 
 ### Changed
 
-- The product has been rebranded from the previous mixed `CustomToDo` / `CustomTaskManager` naming to `Gridoryn` across the app UI, packaging metadata, screenshots, help text, and public docs while keeping legacy Qt storage identifiers for backward-compatible local data paths
+- The product branding is now fully unified around `Gridoryn` across the app UI, packaging metadata, screenshots, help text, public docs, build outputs, storage identifiers, and log naming
 - Demo/sample data was expanded into a full showcase workspace with dense timelines, four populated projects, attachments, recurrence examples, richer templates, and cockpit-ready PM records
 - Demo/sample data now uses fictionalized people and sample content only
 - Embedded help and README were updated to document the project cockpit, phase search, milestones, deliverables, baselines, and workload planning

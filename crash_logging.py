@@ -15,9 +15,6 @@ from app_metadata import APP_LOG_SLUG, APP_NAME, APP_PROFILE, APP_VERSION
 from app_paths import app_data_dir
 
 
-LEGACY_LOG_SLUGS = ("customtodo", "customtaskmanager")
-
-
 def logs_dir() -> Path:
     path = Path(app_data_dir()) / "logs"
     try:
@@ -35,7 +32,7 @@ def current_log_path() -> Path:
 def list_log_paths(limit: int = 20) -> list[Path]:
     try:
         files_by_path: dict[Path, Path] = {}
-        for slug in (APP_LOG_SLUG, *LEGACY_LOG_SLUGS):
+        for slug in (APP_LOG_SLUG,):
             for path in logs_dir().glob(f"{slug}_*.log"):
                 files_by_path[path] = path
         files = sorted(

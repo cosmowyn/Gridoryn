@@ -1,12 +1,9 @@
 APP_NAME = "Gridoryn"
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
 APP_PROFILE = "default"
 APP_LOG_SLUG = "gridoryn"
-
-# Keep legacy Qt storage identifiers so existing local data continues to load
-# from the same per-user directories after the Gridoryn rebrand.
-APP_STORAGE_ORGANIZATION = "FocusTools"
-APP_STORAGE_NAME = "CustomTaskManager"
+APP_STORAGE_ORGANIZATION = "Gridoryn"
+APP_STORAGE_NAME = "Gridoryn"
 
 
 def app_display_name() -> str:

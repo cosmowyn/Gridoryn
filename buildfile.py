@@ -32,8 +32,6 @@ ENTRY_SCRIPT = "main.py"
 VENV_DIR = ".venv"
 ICON_ENV_VAR = "GRIDORYN_ICON"
 SPLASH_ENV_VAR = "GRIDORYN_SPLASH"
-LEGACY_ICON_ENV_VAR = "CUSTOMTODO_ICON"
-LEGACY_SPLASH_ENV_VAR = "CUSTOMTODO_SPLASH"
 
 
 def _is_windows() -> bool:
@@ -279,14 +277,6 @@ def _env_asset_path(var_name: str) -> Path | None:
     return asset_path
 
 
-def _env_asset_path_any(*var_names: str) -> Path | None:
-    for var_name in var_names:
-        path = _env_asset_path(var_name)
-        if path is not None:
-            return path
-    return None
-
-
 def _default_icon_candidates(project_root: Path) -> list[Path]:
     icons_dir = project_root / "build_assets" / "icons"
     if _is_windows():
@@ -304,7 +294,7 @@ def _default_icon_candidates(project_root: Path) -> list[Path]:
 
 
 def _resolve_icon(project_root: Path) -> str | None:
-    env_icon = _env_asset_path_any(ICON_ENV_VAR, LEGACY_ICON_ENV_VAR)
+    env_icon = _env_asset_path(ICON_ENV_VAR)
     if env_icon is not None:
         _validate_icon_path(str(env_icon))
         if _is_macos() and env_icon.suffix.lower() != ".icns":
@@ -327,7 +317,7 @@ def _resolve_splash(project_root: Path) -> str | None:
     if _is_macos():
         return None
 
-    env_splash = _env_asset_path_any(SPLASH_ENV_VAR, LEGACY_SPLASH_ENV_VAR)
+    env_splash = _env_asset_path(SPLASH_ENV_VAR)
     if env_splash is not None:
         return str(env_splash)
 

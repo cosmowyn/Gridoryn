@@ -4,7 +4,7 @@ Gridoryn is a local-first desktop task and personal project management applicati
 
 It combines a fast hierarchical task tree with review workflows, project cockpit planning, diagnostics, backups, and strong offline data ownership. It is designed for a single power user who wants serious planning capability without cloud accounts, team features, or a web backend.
 
-Current stable version: `v1.0.0`
+Current stable version: `v2.0.0`
 
 ## Why Gridoryn
 
@@ -88,7 +88,7 @@ Gridoryn is not for:
 ### Install
 
 ```bash
-git clone https://github.com/cosmowyn/CustomToDo.git Gridoryn
+git clone https://github.com/cosmowyn/Gridoryn.git Gridoryn
 cd Gridoryn
 python3 -m venv .venv
 source .venv/bin/activate
@@ -175,7 +175,6 @@ The build helper:
 - reads the stable app name and version from [app_metadata.py](app_metadata.py)
 - uses stable local icon/splash assets automatically when they are present
 - supports optional asset overrides through `GRIDORYN_ICON` and `GRIDORYN_SPLASH`
-- still accepts the legacy `CUSTOMTODO_ICON` and `CUSTOMTODO_SPLASH` variables for backward-compatible local build scripts
 - builds a PyInstaller desktop artifact
 - stages a versioned release copy under `dist/release/`
 - writes `dist/release_manifest.json`
