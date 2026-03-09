@@ -88,6 +88,7 @@ from ui_layout import (
     configure_box_layout,
     configure_grid_layout,
 )
+from ui_perf import measure_ui
 
 
 _UNSET = object()
@@ -156,6 +157,13 @@ class MainWindow(QMainWindow):
         self._global_capture_hotkey = None
         self._active_task_id: int | None = None
         self._active_task_details: dict | None = None
+        self._row_action_update_pending = False
+        self._row_action_state: tuple[int, int, int, int, bool] | None = None
+        self._active_task_views_refresh_pending = False
+        self._focus_panel_refresh_pending = False
+        self._calendar_marker_refresh_pending = False
+        self._review_panel_refresh_pending = False
+        self._analytics_panel_refresh_pending = False
         self._reminder_mode = str(
             self.model.settings.value("ui/reminder_mode", self.REMINDER_MODE_NORMAL)
         ).strip() or self.REMINDER_MODE_NORMAL
@@ -165,7 +173,6 @@ class MainWindow(QMainWindow):
         self._wheel_focus_guard = WheelFocusGuard(self)
         if app is not None:
             app.installEventFilter(self._wheel_focus_guard)
-            app.installEventFilter(self)
 
         # Apply theme early so palette + fonts are correct
         self.model.apply_theme_to_app(QApplication.instance())
@@ -214,6 +221,7 @@ class MainWindow(QMainWindow):
         hdr.setSectionsMovable(True)
         hdr.setStretchLastSection(False)
         self._task_header_layout_pending = False
+        self._task_header_layout_signature: tuple | None = None
 
         self.view.setRootIsDecorated(True)
         self.view.setItemsExpandable(True)
@@ -408,9 +416,15 @@ class MainWindow(QMainWindow):
         self.row_del_btn.hide()
 
         self.view.selectionModel().currentChanged.connect(self._on_current_changed)
-        self.view.verticalScrollBar().valueChanged.connect(lambda *_: self._update_row_action_buttons())
-        self.view.horizontalScrollBar().valueChanged.connect(lambda *_: self._update_row_action_buttons())
-        self.view.header().geometriesChanged.connect(lambda: self._update_row_action_buttons())
+        self.view.verticalScrollBar().valueChanged.connect(
+            lambda *_: self._schedule_row_action_button_update()
+        )
+        self.view.horizontalScrollBar().valueChanged.connect(
+            lambda *_: self._schedule_row_action_button_update()
+        )
+        self.view.header().geometriesChanged.connect(
+            lambda: self._schedule_row_action_button_update()
+        )
         self.view.viewport().installEventFilter(self)
         self.view.installEventFilter(self)
         self.view.header().installEventFilter(self)
@@ -439,23 +453,23 @@ class MainWindow(QMainWindow):
         self.model.modelReset.connect(self._apply_collapsed_state_to_view)
         self.proxy.modelReset.connect(self._apply_collapsed_state_to_view)
         self.model.modelReset.connect(self._refresh_calendar_list)
-        self.model.modelReset.connect(self._refresh_calendar_markers)
-        self.model.modelReset.connect(self._refresh_review_panel)
-        self.model.modelReset.connect(self._refresh_focus_panel)
-        self.model.modelReset.connect(self._refresh_analytics_panel)
-        self.model.modelReset.connect(self._refresh_active_task_views)
-        self.proxy.modelReset.connect(self._refresh_active_task_views)
+        self.model.modelReset.connect(self._schedule_calendar_marker_refresh)
+        self.model.modelReset.connect(self._schedule_review_panel_refresh)
+        self.model.modelReset.connect(self._schedule_focus_panel_refresh)
+        self.model.modelReset.connect(self._schedule_analytics_panel_refresh)
+        self.model.modelReset.connect(self._schedule_active_task_view_refresh)
+        self.proxy.modelReset.connect(self._schedule_active_task_view_refresh)
         self.model.modelReset.connect(self._schedule_task_header_layout)
         self.proxy.modelReset.connect(self._schedule_task_header_layout)
-        self.model.dataChanged.connect(lambda *_: self._refresh_calendar_markers())
-        self.model.dataChanged.connect(lambda *_: self._refresh_focus_panel())
-        self.model.dataChanged.connect(lambda *_: self._refresh_active_task_views())
-        self.model.rowsInserted.connect(lambda *_: self._refresh_calendar_markers())
-        self.model.rowsInserted.connect(lambda *_: self._refresh_focus_panel())
-        self.model.rowsInserted.connect(lambda *_: self._refresh_active_task_views())
-        self.model.rowsRemoved.connect(lambda *_: self._refresh_calendar_markers())
-        self.model.rowsRemoved.connect(lambda *_: self._refresh_focus_panel())
-        self.model.rowsRemoved.connect(lambda *_: self._refresh_active_task_views())
+        self.model.dataChanged.connect(lambda *_: self._schedule_calendar_marker_refresh())
+        self.model.dataChanged.connect(lambda *_: self._schedule_focus_panel_refresh())
+        self.model.dataChanged.connect(lambda *_: self._schedule_active_task_view_refresh())
+        self.model.rowsInserted.connect(lambda *_: self._schedule_calendar_marker_refresh())
+        self.model.rowsInserted.connect(lambda *_: self._schedule_focus_panel_refresh())
+        self.model.rowsInserted.connect(lambda *_: self._schedule_active_task_view_refresh())
+        self.model.rowsRemoved.connect(lambda *_: self._schedule_calendar_marker_refresh())
+        self.model.rowsRemoved.connect(lambda *_: self._schedule_focus_panel_refresh())
+        self.model.rowsRemoved.connect(lambda *_: self._schedule_active_task_view_refresh())
         self.undo_stack.indexChanged.connect(self._on_undo_stack_index_changed)
 
         # Timer to refresh due-date gradient + foreground contrast
@@ -486,14 +500,16 @@ class MainWindow(QMainWindow):
         focus_quick_add.triggered.connect(self._focus_quick_add_input)
         self.addAction(focus_quick_add)
 
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        QTimer.singleShot(0, self._schedule_row_action_button_update)
         QTimer.singleShot(0, self._schedule_task_header_layout)
-        QTimer.singleShot(0, self._refresh_active_task_views)
+        QTimer.singleShot(0, self._schedule_active_task_view_refresh)
         QTimer.singleShot(0, self._maybe_show_onboarding)
 
     # ---------- Splash (close again once UI shows) ----------
     def showEvent(self, event):
         super().showEvent(event)
+        self._apply_task_header_layout()
+        self._schedule_row_action_button_update()
         try:
             import pyi_splash  # type: ignore
             pyi_splash.close()
@@ -502,70 +518,88 @@ class MainWindow(QMainWindow):
 
     # ---------- Event filter for overlay alignment ----------
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.ToolTip and not self._tooltips_enabled:
-            return True
-        if hasattr(self, "view") and obj in (self.view, self.view.viewport()) and event.type() == QEvent.Type.KeyPress:
-            if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
-                if event.modifiers() == Qt.KeyboardModifier.NoModifier:
-                    if self.view.state() != QAbstractItemView.State.EditingState and self.view.currentIndex().isValid():
-                        self._edit_current_cell()
+        with measure_ui("main.eventFilter"):
+            if event.type() == QEvent.Type.ToolTip and not self._tooltips_enabled:
+                return True
+            if hasattr(self, "view") and obj in (self.view, self.view.viewport()) and event.type() == QEvent.Type.KeyPress:
+                if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
+                    if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+                        if self.view.state() != QAbstractItemView.State.EditingState and self.view.currentIndex().isValid():
+                            self._edit_current_cell()
+                            return True
+            if hasattr(self, "view") and obj in (self.view.viewport(), self.view):
+                if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+                    self._schedule_row_action_button_update()
+            if hasattr(self, "view") and obj in (self.view, self.view.header()):
+                if event.type() in (
+                    QEvent.Type.Show,
+                    QEvent.Type.Resize,
+                    QEvent.Type.FontChange,
+                    QEvent.Type.StyleChange,
+                ):
+                    self._schedule_task_header_layout()
+            if hasattr(self, "view") and obj == self.view.viewport():
+                if event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+                    md = event.mimeData()
+                    if md and md.hasUrls():
+                        event.acceptProposedAction()
                         return True
-        if hasattr(self, "view") and obj in (self.view.viewport(), self.view):
-            if event.type() in (QEvent.Type.Resize, QEvent.Type.Wheel, QEvent.Type.Move, QEvent.Type.Show):
-                QTimer.singleShot(0, self._update_row_action_buttons)
-        if hasattr(self, "view") and obj in (self.view, self.view.header()):
-            if event.type() in (
-                QEvent.Type.Show,
-                QEvent.Type.Resize,
-                QEvent.Type.FontChange,
-                QEvent.Type.StyleChange,
-                QEvent.Type.LayoutRequest,
-                QEvent.Type.PolishRequest,
-            ):
-                self._schedule_task_header_layout()
-        if hasattr(self, "view") and obj == self.view.viewport():
-            if event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
-                md = event.mimeData()
-                if md and md.hasUrls():
-                    event.acceptProposedAction()
-                    return True
-            if event.type() == QEvent.Type.Drop:
-                md = event.mimeData()
-                if md and md.hasUrls():
-                    tid = self._selected_task_id()
-                    if tid is not None:
-                        paths = []
-                        for u in md.urls():
-                            if u.isLocalFile():
-                                p = u.toLocalFile()
-                                if p:
-                                    paths.append(p)
-                        if paths:
-                            self.model.undo_stack.beginMacro("Attach dropped files")
-                            try:
-                                for p in paths:
-                                    try:
-                                        self.model.add_attachment(int(tid), p, "")
-                                    except Exception:
-                                        continue
-                            finally:
-                                self.model.undo_stack.endMacro()
-                            self._refresh_details_dock()
-                    event.acceptProposedAction()
-                    return True
-        return super().eventFilter(obj, event)
+                if event.type() == QEvent.Type.Drop:
+                    md = event.mimeData()
+                    if md and md.hasUrls():
+                        tid = self._selected_task_id()
+                        if tid is not None:
+                            paths = []
+                            for u in md.urls():
+                                if u.isLocalFile():
+                                    p = u.toLocalFile()
+                                    if p:
+                                        paths.append(p)
+                            if paths:
+                                self.model.undo_stack.beginMacro("Attach dropped files")
+                                try:
+                                    for p in paths:
+                                        try:
+                                            self.model.add_attachment(int(tid), p, "")
+                                        except Exception:
+                                            continue
+                                finally:
+                                    self.model.undo_stack.endMacro()
+                                self._refresh_details_dock()
+                        event.acceptProposedAction()
+                        return True
+            return super().eventFilter(obj, event)
 
     def _row_button_size(self) -> int:
         h = self.view.fontMetrics().height()
         return max(18, min(28, h + 6))
 
+    def _schedule_row_action_button_update(self):
+        if self._row_action_update_pending:
+            return
+        self._row_action_update_pending = True
+        QTimer.singleShot(16, self._flush_row_action_button_update)
+
+    def _flush_row_action_button_update(self):
+        self._row_action_update_pending = False
+        self._update_row_action_buttons()
+
     def _update_row_action_buttons(self):
+        with measure_ui(
+            "main._update_row_action_buttons",
+            visible=bool(self._is_task_table_visible()),
+        ):
+            self._update_row_action_buttons_impl()
+
+    def _update_row_action_buttons_impl(self):
         if not getattr(self, "tree_wrap", None) or not self._is_task_table_visible():
+            self._row_action_state = None
             self.row_add_btn.hide()
             self.row_del_btn.hide()
             return
         idx = self.view.currentIndex()
         if not idx.isValid():
+            self._row_action_state = None
             self.row_add_btn.hide()
             self.row_del_btn.hide()
             return
@@ -575,6 +609,7 @@ class MainWindow(QMainWindow):
         vp_rect = self.view.viewport().rect()
 
         if rect.isNull() or rect.height() <= 0 or not rect.intersects(vp_rect):
+            self._row_action_state = None
             self.row_add_btn.hide()
             self.row_del_btn.hide()
             return
@@ -593,6 +628,7 @@ class MainWindow(QMainWindow):
         src_idx0 = self.proxy.mapToSource(idx0)
         task_id = self.model.task_id_from_index(src_idx0)
         if task_id is None:
+            self._row_action_state = None
             self.row_add_btn.hide()
             self.row_del_btn.hide()
             return
@@ -614,13 +650,19 @@ class MainWindow(QMainWindow):
         y = center_in_gutter.y() - (size // 2)
         y = max(0, min(self._row_gutter.height() - size, y))
 
-        self.row_add_btn.move(x_add, y)
-        self.row_del_btn.move(x_del, y)
+        state = (x_add, y, x_del, y, bool(can_add_child))
+        if self._row_action_state != state:
+            self.row_add_btn.move(x_add, y)
+            self.row_del_btn.move(x_del, y)
+            self.row_add_btn.setEnabled(can_add_child)
+            self._row_action_state = state
 
-        self.row_add_btn.show()
-        self.row_del_btn.show()
-        self.row_add_btn.raise_()
-        self.row_del_btn.raise_()
+        if not self.row_add_btn.isVisible():
+            self.row_add_btn.show()
+            self.row_add_btn.raise_()
+        if not self.row_del_btn.isVisible():
+            self.row_del_btn.show()
+            self.row_del_btn.raise_()
 
     def _row_add_child_clicked(self):
         pidx = self.view.currentIndex()
@@ -634,11 +676,11 @@ class MainWindow(QMainWindow):
         if not self.model.add_child_task(task_id):
             self._pending_edit_on_insert = False
             self._show_nesting_limit_message()
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _row_delete_clicked(self):
         self._archive_selected()
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _request_edit_after_insert(self):
         self._pending_edit_on_insert = True
@@ -963,7 +1005,7 @@ class MainWindow(QMainWindow):
             return
 
         self.model.archive_tasks([task_id])
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     # ---------- Filters ----------
     def _init_filter_dock(self):
@@ -1445,7 +1487,7 @@ class MainWindow(QMainWindow):
         self._refresh_task_browser()
         if not want_floating and bool(show_after):
             self._schedule_task_header_layout()
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _show_controls_dock(self):
         if hasattr(self, "controls_dock"):
@@ -1640,7 +1682,7 @@ class MainWindow(QMainWindow):
         self._update_task_table_placeholder()
         if show_tree:
             self._schedule_task_header_layout()
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _toggle_task_table_visibility(self):
         visible = self._is_task_table_visible()
@@ -1709,6 +1751,56 @@ class MainWindow(QMainWindow):
             self.focus_panel.set_current_summary("Current selection: none", None)
         self._clear_task_browser()
 
+    def _schedule_active_task_view_refresh(self):
+        if self._active_task_views_refresh_pending:
+            return
+        self._active_task_views_refresh_pending = True
+        QTimer.singleShot(0, self._flush_active_task_view_refresh)
+
+    def _flush_active_task_view_refresh(self):
+        self._active_task_views_refresh_pending = False
+        self._refresh_active_task_views()
+
+    def _schedule_focus_panel_refresh(self):
+        if self._focus_panel_refresh_pending:
+            return
+        self._focus_panel_refresh_pending = True
+        QTimer.singleShot(0, self._flush_focus_panel_refresh)
+
+    def _flush_focus_panel_refresh(self):
+        self._focus_panel_refresh_pending = False
+        self._refresh_focus_panel()
+
+    def _schedule_review_panel_refresh(self):
+        if self._review_panel_refresh_pending:
+            return
+        self._review_panel_refresh_pending = True
+        QTimer.singleShot(0, self._flush_review_panel_refresh)
+
+    def _flush_review_panel_refresh(self):
+        self._review_panel_refresh_pending = False
+        self._refresh_review_panel()
+
+    def _schedule_analytics_panel_refresh(self):
+        if self._analytics_panel_refresh_pending:
+            return
+        self._analytics_panel_refresh_pending = True
+        QTimer.singleShot(0, self._flush_analytics_panel_refresh)
+
+    def _flush_analytics_panel_refresh(self):
+        self._analytics_panel_refresh_pending = False
+        self._refresh_analytics_panel()
+
+    def _schedule_calendar_marker_refresh(self):
+        if self._calendar_marker_refresh_pending:
+            return
+        self._calendar_marker_refresh_pending = True
+        QTimer.singleShot(0, self._flush_calendar_marker_refresh)
+
+    def _flush_calendar_marker_refresh(self):
+        self._calendar_marker_refresh_pending = False
+        self._refresh_calendar_markers()
+
     def _restore_task_focus_if_needed(self, task_id: int | None):
         if task_id is None or not self._db_available():
             return
@@ -1718,16 +1810,25 @@ class MainWindow(QMainWindow):
         self._focus_task_by_id(int(task_id))
 
     def _refresh_relationships_panel_from_details(self, details: dict | None):
-        if not hasattr(self, "relationships_panel"):
-            return
-        if not self._db_available():
-            self.relationships_panel.set_relationships(None)
-            return
-        if not details or details.get("id") is None:
-            self.relationships_panel.set_relationships(None)
-            return
-        data = self.model.task_relationships(int(details["id"]), limit=10)
-        self.relationships_panel.set_relationships(data)
+        with measure_ui(
+            "main._refresh_relationships_panel",
+            visible=bool(
+                hasattr(self, "relationships_dock")
+                and self.relationships_dock.isVisible()
+            ),
+        ):
+            if not hasattr(self, "relationships_panel"):
+                return
+            if hasattr(self, "relationships_dock") and not self.relationships_dock.isVisible():
+                return
+            if not self._db_available():
+                self.relationships_panel.set_relationships(None)
+                return
+            if not details or details.get("id") is None:
+                self.relationships_panel.set_relationships(None)
+                return
+            data = self.model.task_relationships(int(details["id"]), limit=10)
+            self.relationships_panel.set_relationships(data)
 
     def _selected_category_folder_id(self, details: dict | None = None) -> int | None:
         idx = self._selected_proxy_index()
@@ -1741,76 +1842,95 @@ class MainWindow(QMainWindow):
         return None
 
     def _refresh_project_panel_from_details(self, details: dict | None, category_folder_id=_UNSET):
-        if not hasattr(self, "project_panel"):
-            return
-        if not self._db_available():
-            self.project_panel.set_category_choices([], None)
-            self.project_panel.set_project_choices([], None)
-            self.project_panel.set_dashboard(None)
-            return
-        current_folder_id = (
-            self._selected_category_folder_id(details)
-            if category_folder_id is _UNSET
-            else (
-                None if category_folder_id is None else int(category_folder_id)
+        with measure_ui(
+            "main._refresh_project_panel",
+            visible=bool(
+                hasattr(self, "project_dock")
+                and self.project_dock.isVisible()
+            ),
+        ):
+            if not hasattr(self, "project_panel"):
+                return
+            if hasattr(self, "project_dock") and not self.project_dock.isVisible():
+                return
+            if not self._db_available():
+                self.project_panel.set_category_choices([], None)
+                self.project_panel.set_project_choices([], None)
+                self.project_panel.set_dashboard(None)
+                return
+            current_folder_id = (
+                self._selected_category_folder_id(details)
+                if category_folder_id is _UNSET
+                else (
+                    None if category_folder_id is None else int(category_folder_id)
+                )
             )
-        )
-        current_project_id = (
-            int(details["project_id"])
-            if details and details.get("project_id") is not None
-            else None
-        )
-        self.project_panel.set_category_choices(
-            self.model.list_category_folders(),
-            current_folder_id,
-        )
-        projects = self.model.list_project_candidates(folder_id=current_folder_id)
-        visible_ids = {int(row.get("id") or 0) for row in projects}
-        existing_project_id = self.project_panel.project_combo.currentData()
-        if current_project_id is None and existing_project_id is not None:
-            existing_project_id = int(existing_project_id)
-            current_project_id = existing_project_id if existing_project_id in visible_ids else None
-        self.project_panel.set_project_choices(
-            projects,
-            current_project_id,
-        )
-        if current_project_id is None and self.project_panel.project_combo.currentData() is not None:
-            current_project_id = int(self.project_panel.project_combo.currentData())
-        if current_project_id is None:
-            self.project_panel.set_dashboard(None)
-            return
-        try:
-            dashboard = self.model.fetch_project_dashboard(int(current_project_id))
-        except Exception as e:
-            QMessageBox.warning(self, "Project cockpit refresh failed", str(e))
-            return
-        self.project_panel.set_dashboard(dashboard)
-        self.project_panel.set_active_task(
-            int(details["id"]) if details and details.get("id") is not None else None
-        )
+            current_project_id = (
+                int(details["project_id"])
+                if details and details.get("project_id") is not None
+                else None
+            )
+            self.project_panel.set_category_choices(
+                self.model.list_category_folders(),
+                current_folder_id,
+            )
+            projects = self.model.list_project_candidates(folder_id=current_folder_id)
+            visible_ids = {int(row.get("id") or 0) for row in projects}
+            existing_project_id = self.project_panel.project_combo.currentData()
+            if current_project_id is None and existing_project_id is not None:
+                existing_project_id = int(existing_project_id)
+                current_project_id = existing_project_id if existing_project_id in visible_ids else None
+            self.project_panel.set_project_choices(
+                projects,
+                current_project_id,
+            )
+            if current_project_id is None and self.project_panel.project_combo.currentData() is not None:
+                current_project_id = int(self.project_panel.project_combo.currentData())
+            if current_project_id is None:
+                self.project_panel.set_dashboard(None)
+                return
+            try:
+                dashboard = self.model.fetch_project_dashboard(int(current_project_id))
+            except Exception as e:
+                QMessageBox.warning(self, "Project cockpit refresh failed", str(e))
+                return
+            self.project_panel.set_dashboard(dashboard)
+            self.project_panel.set_active_task(
+                int(details["id"]) if details and details.get("id") is not None else None
+            )
 
     def _refresh_active_task_views(self):
-        if not self._db_available():
-            self._clear_active_task_views()
-            return
-        details = self._selected_task_details()
-        self._active_task_details = details
-        self._active_task_id = (
-            int(details["id"])
-            if details and details.get("id") is not None
-            else None
-        )
-        self._update_active_task_status_label(details)
-        if hasattr(self, "details_panel"):
-            self.details_panel.set_task_details(details)
-        self._refresh_project_panel_from_details(details)
-        self._refresh_relationships_panel_from_details(details)
-        if hasattr(self, "focus_panel"):
-            self.focus_panel.set_current_summary(
-                self._focus_current_summary(details),
-                self._active_task_id,
+        visible = any(
+            (
+                hasattr(self, "details_dock") and self.details_dock.isVisible(),
+                hasattr(self, "project_dock") and self.project_dock.isVisible(),
+                hasattr(self, "relationships_dock")
+                and self.relationships_dock.isVisible(),
+                hasattr(self, "focus_dock") and self.focus_dock.isVisible(),
             )
-        self._refresh_task_browser()
+        )
+        with measure_ui("main._refresh_active_task_views", visible=visible):
+            if not self._db_available():
+                self._clear_active_task_views()
+                return
+            details = self._selected_task_details()
+            self._active_task_details = details
+            self._active_task_id = (
+                int(details["id"])
+                if details and details.get("id") is not None
+                else None
+            )
+            self._update_active_task_status_label(details)
+            if hasattr(self, "details_panel"):
+                self.details_panel.set_task_details(details)
+            self._refresh_project_panel_from_details(details)
+            self._refresh_relationships_panel_from_details(details)
+            if hasattr(self, "focus_panel"):
+                self.focus_panel.set_current_summary(
+                    self._focus_current_summary(details),
+                    self._active_task_id,
+                )
+            self._refresh_task_browser()
 
     def _refresh_details_dock(self):
         self._refresh_active_task_views()
@@ -2155,36 +2275,48 @@ class MainWindow(QMainWindow):
         self._refresh_details_dock()
 
     def _refresh_calendar_markers(self):
-        if not hasattr(self, "calendar"):
-            return
-        if not self._db_available():
-            self.calendar.set_completion_summary({})
-            return
-        try:
-            year = int(self.calendar.yearShown())
-            month = int(self.calendar.monthShown())
-            start = date(year, month, 1)
-            if month == 12:
-                end = date(year + 1, 1, 1) - timedelta(days=1)
-            else:
-                end = date(year, month + 1, 1) - timedelta(days=1)
-            rows = self.db.fetch_due_date_completion_summary(
-                start_due_iso=start.isoformat(),
-                end_due_iso=end.isoformat(),
-                include_archived=False,
-            )
-            by_date = {str(r.get("due_date") or ""): float(r.get("percent") or 0.0) for r in rows}
-            self.calendar.set_completion_summary(by_date)
-        except Exception:
-            self.calendar.set_completion_summary({})
+        with measure_ui(
+            "main._refresh_calendar_markers",
+            visible=bool(
+                hasattr(self, "calendar_dock")
+                and self.calendar_dock.isVisible()
+            ),
+        ):
+            if not hasattr(self, "calendar"):
+                return
+            if hasattr(self, "calendar_dock") and not self.calendar_dock.isVisible():
+                return
+            if not self._db_available():
+                self.calendar.set_completion_summary({})
+                return
+            try:
+                year = int(self.calendar.yearShown())
+                month = int(self.calendar.monthShown())
+                start = date(year, month, 1)
+                if month == 12:
+                    end = date(year + 1, 1, 1) - timedelta(days=1)
+                else:
+                    end = date(year, month + 1, 1) - timedelta(days=1)
+                rows = self.db.fetch_due_date_completion_summary(
+                    start_due_iso=start.isoformat(),
+                    end_due_iso=end.isoformat(),
+                    include_archived=False,
+                )
+                by_date = {
+                    str(r.get("due_date") or ""): float(r.get("percent") or 0.0)
+                    for r in rows
+                }
+                self.calendar.set_completion_summary(by_date)
+            except Exception:
+                self.calendar.set_completion_summary({})
 
     def _on_undo_stack_index_changed(self, _index: int):
         self._refresh_details_dock()
         self._refresh_calendar_list()
-        self._refresh_calendar_markers()
-        self._refresh_review_panel()
-        self._refresh_analytics_panel()
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_calendar_marker_refresh()
+        self._schedule_review_panel_refresh()
+        self._schedule_analytics_panel_refresh()
+        self._schedule_row_action_button_update()
 
     def _refresh_calendar_list(self):
         if not hasattr(self, "calendar_list"):
@@ -2277,28 +2409,37 @@ class MainWindow(QMainWindow):
         stalled_days: int | None = None,
         recent_days: int | None = None,
     ):
-        if not hasattr(self, "review_panel"):
-            return
-        if not self._db_available():
-            self.review_panel.set_review_data({})
-            return
-        if waiting_days is None:
-            waiting_days = int(self.review_panel.waiting_days.value())
-        if stalled_days is None:
-            stalled_days = int(self.review_panel.stalled_days.value())
-        if recent_days is None:
-            recent_days = int(self.review_panel.recent_days.value())
-        try:
-            data = self.model.fetch_review_data(
-                waiting_days=int(waiting_days),
-                stalled_days=int(stalled_days),
-                recent_days=int(recent_days),
-            )
-        except Exception as e:
-            QMessageBox.warning(self, "Review refresh failed", str(e))
-            return
-        filtered, hidden_counts = filter_acknowledged_review_data(data, self._review_ack_state())
-        self.review_panel.set_review_data(filtered, hidden_counts=hidden_counts)
+        with measure_ui(
+            "main._refresh_review_panel",
+            visible=bool(
+                hasattr(self, "review_dock")
+                and self.review_dock.isVisible()
+            ),
+        ):
+            if not hasattr(self, "review_panel"):
+                return
+            if hasattr(self, "review_dock") and not self.review_dock.isVisible():
+                return
+            if not self._db_available():
+                self.review_panel.set_review_data({})
+                return
+            if waiting_days is None:
+                waiting_days = int(self.review_panel.waiting_days.value())
+            if stalled_days is None:
+                stalled_days = int(self.review_panel.stalled_days.value())
+            if recent_days is None:
+                recent_days = int(self.review_panel.recent_days.value())
+            try:
+                data = self.model.fetch_review_data(
+                    waiting_days=int(waiting_days),
+                    stalled_days=int(stalled_days),
+                    recent_days=int(recent_days),
+                )
+            except Exception as e:
+                QMessageBox.warning(self, "Review refresh failed", str(e))
+                return
+            filtered, hidden_counts = filter_acknowledged_review_data(data, self._review_ack_state())
+            self.review_panel.set_review_data(filtered, hidden_counts=hidden_counts)
 
     def _review_ack_state(self) -> dict[str, set[str]]:
         raw = self.model.settings.value("review/acknowledged", "")
@@ -2430,29 +2571,36 @@ class MainWindow(QMainWindow):
         return f"Current selection: [P{priority}] {desc} | {status} | bucket: {bucket}"
 
     def _refresh_focus_panel(self, include_waiting: bool | None = None):
-        if not hasattr(self, "focus_panel"):
-            return
-        if not self._db_available():
-            self.focus_panel.set_focus_data([], "Current selection: none", None)
-            return
-        if hasattr(self, "focus_dock") and not self.focus_dock.isVisible():
-            return
-        if include_waiting is None:
-            include_waiting = bool(self.focus_panel.include_waiting.isChecked())
-        else:
-            self.focus_panel.include_waiting.blockSignals(True)
-            self.focus_panel.include_waiting.setChecked(bool(include_waiting))
-            self.focus_panel.include_waiting.blockSignals(False)
-        try:
-            rows = self.model.fetch_focus_data(include_waiting=bool(include_waiting), limit=40)
-        except Exception as e:
-            QMessageBox.warning(self, "Focus refresh failed", str(e))
-            return
-        self.focus_panel.set_focus_data(
-            rows,
-            self._focus_current_summary(self._active_task_details),
-            self._active_task_id,
-        )
+        with measure_ui(
+            "main._refresh_focus_panel",
+            visible=bool(
+                hasattr(self, "focus_dock")
+                and self.focus_dock.isVisible()
+            ),
+        ):
+            if not hasattr(self, "focus_panel"):
+                return
+            if hasattr(self, "focus_dock") and not self.focus_dock.isVisible():
+                return
+            if not self._db_available():
+                self.focus_panel.set_focus_data([], "Current selection: none", None)
+                return
+            if include_waiting is None:
+                include_waiting = bool(self.focus_panel.include_waiting.isChecked())
+            else:
+                self.focus_panel.include_waiting.blockSignals(True)
+                self.focus_panel.include_waiting.setChecked(bool(include_waiting))
+                self.focus_panel.include_waiting.blockSignals(False)
+            try:
+                rows = self.model.fetch_focus_data(include_waiting=bool(include_waiting), limit=40)
+            except Exception as e:
+                QMessageBox.warning(self, "Focus refresh failed", str(e))
+                return
+            self.focus_panel.set_focus_data(
+                rows,
+                self._focus_current_summary(self._active_task_details),
+                self._active_task_id,
+            )
 
     def _focus_panel_focus_task(self, task_id: int):
         tid = int(task_id)
@@ -2466,27 +2614,36 @@ class MainWindow(QMainWindow):
         self._show_details_and_focus()
 
     def _refresh_analytics_panel(self, trend_days: int | None = None, tag_days: int | None = None):
-        if not hasattr(self, "analytics_panel"):
-            return
-        if not self._db_available():
-            self.analytics_panel.set_analytics_data({})
-            return
-        if trend_days is None:
-            trend_days = int(self.analytics_panel.trend_days.value())
-        if tag_days is None:
-            tag_days = int(self.analytics_panel.tag_days.value())
-        try:
-            data = self.model.fetch_analytics_summary(trend_days=int(trend_days), tag_days=int(tag_days))
-        except Exception as e:
-            QMessageBox.warning(self, "Analytics refresh failed", str(e))
-            return
-        self.analytics_panel.set_analytics_data(data)
+        with measure_ui(
+            "main._refresh_analytics_panel",
+            visible=bool(
+                hasattr(self, "analytics_dock")
+                and self.analytics_dock.isVisible()
+            ),
+        ):
+            if not hasattr(self, "analytics_panel"):
+                return
+            if hasattr(self, "analytics_dock") and not self.analytics_dock.isVisible():
+                return
+            if not self._db_available():
+                self.analytics_panel.set_analytics_data({})
+                return
+            if trend_days is None:
+                trend_days = int(self.analytics_panel.trend_days.value())
+            if tag_days is None:
+                tag_days = int(self.analytics_panel.tag_days.value())
+            try:
+                data = self.model.fetch_analytics_summary(trend_days=int(trend_days), tag_days=int(tag_days))
+            except Exception as e:
+                QMessageBox.warning(self, "Analytics refresh failed", str(e))
+                return
+            self.analytics_panel.set_analytics_data(data)
 
     def _on_search_changed(self, text: str):
         self.proxy.set_search_text(text)
         self._update_dragdrop_mode()
         self._refresh_task_browser()
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _apply_filters(self):
         statuses = self.filter_panel.status_allowed()
@@ -2505,7 +2662,7 @@ class MainWindow(QMainWindow):
 
         self._update_dragdrop_mode()
         self._refresh_task_browser()
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _update_dragdrop_mode(self):
         active = self.proxy.is_filter_active() or not self.proxy.is_manual_sort_mode()
@@ -4200,7 +4357,7 @@ class MainWindow(QMainWindow):
             self.filter_dock.show()
         else:
             self.filter_dock.hide()
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _set_reminder_mode(self, mode: str, show_message: bool = True):
         m = str(mode or "").strip().lower()
@@ -4248,7 +4405,7 @@ class MainWindow(QMainWindow):
                 def _toggle(checked: bool):
                     self.view.setColumnHidden(col_index, not checked)
                     self.model.settings.setValue(f"columns/hidden/{col_key}", not checked)
-                    QTimer.singleShot(0, self._update_row_action_buttons)
+                    self._schedule_row_action_button_update()
                 return _toggle
 
             act.triggered.connect(make_toggle(logical, key))
@@ -4260,14 +4417,14 @@ class MainWindow(QMainWindow):
         for node in self.model.iter_nodes_preorder():
             if node.task:
                 self.model.set_collapsed(int(node.task["id"]), True)
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _expand_all(self):
         self.view.expandAll()
         for node in self.model.iter_nodes_preorder():
             if node.task:
                 self.model.set_collapsed(int(node.task["id"]), False)
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     # ---------- Context menu + selection helpers ----------
     def _create_or_edit_category_folder(
@@ -4609,14 +4766,14 @@ class MainWindow(QMainWindow):
             self._pending_edit_on_insert = False
             self._show_nesting_limit_message()
 
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _on_current_changed(self, *_):
         if hasattr(self, "details_panel"):
             self.details_panel.flush_pending_save()
         if hasattr(self, "project_panel"):
             self.project_panel.flush_pending_saves()
-        self._update_row_action_buttons()
+        self._schedule_row_action_button_update()
         self._refresh_active_task_views()
 
     @staticmethod
@@ -4765,7 +4922,7 @@ class MainWindow(QMainWindow):
         self._update_dragdrop_mode()
         self._refresh_task_browser()
         self._refresh_calendar_list()
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _sync_perspective_buttons(self, active_key: str):
         buttons = getattr(self, "_perspective_buttons", {})
@@ -4787,7 +4944,7 @@ class MainWindow(QMainWindow):
         self.model.settings.setValue("ui/sort_mode", key)
         self._update_dragdrop_mode()
         self._refresh_task_browser()
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _source_index_for_task_id(self, task_id: int, column: int = 0):
         node = self.model.node_for_id(int(task_id))
@@ -4886,7 +5043,7 @@ class MainWindow(QMainWindow):
             return
         if self.model.move_task_relative(int(tid), int(delta)):
             self._focus_task_by_id(int(tid))
-            QTimer.singleShot(0, self._update_row_action_buttons)
+            self._schedule_row_action_button_update()
 
     def _duplicate_selected(self):
         tid = self._selected_task_id()
@@ -5068,7 +5225,7 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self.model.settings, self)
         if dlg.exec():
             self._apply_theme_now()
-            QTimer.singleShot(0, self._update_row_action_buttons)
+            self._schedule_row_action_button_update()
 
     def _add_custom_column(self):
         dlg = AddColumnDialog(self)
@@ -5096,7 +5253,7 @@ class MainWindow(QMainWindow):
         task_id = self.model.task_id_from_index(src)
         if task_id is not None:
             self.model.set_collapsed(task_id, True)
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _on_expanded(self, proxy_index):
         if self._applying_expand_state:
@@ -5105,7 +5262,7 @@ class MainWindow(QMainWindow):
         task_id = self.model.task_id_from_index(src)
         if task_id is not None:
             self.model.set_collapsed(task_id, False)
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _apply_collapsed_state_to_view(self):
         self._applying_expand_state = True
@@ -5127,7 +5284,7 @@ class MainWindow(QMainWindow):
         finally:
             self._applying_expand_state = False
 
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def _source_index_for_node(self, node):
         if node == self.model.root or node is None or node.task is None or node.parent is None:
@@ -5195,6 +5352,7 @@ class MainWindow(QMainWindow):
 
     def _repair_task_header_section_widths(self):
         header = self.view.header()
+        repaired = False
         for logical in range(self.proxy.columnCount()):
             if self.view.isColumnHidden(logical):
                 continue
@@ -5202,19 +5360,37 @@ class MainWindow(QMainWindow):
             minimum_width = self._minimum_header_width_for_column(logical)
             if current_width < minimum_width:
                 header.resizeSection(logical, int(minimum_width))
+                repaired = True
+        return repaired
+
+    def _task_header_layout_signature_for_current_state(self) -> tuple:
+        header = self.view.header()
+        return (
+            int(self.view.width()),
+            int(header.width()),
+            int(header.count()),
+            self.view.font().toString(),
+            tuple(bool(self.view.isColumnHidden(i)) for i in range(self.proxy.columnCount())),
+        )
 
     def _apply_task_header_layout(self):
-        if not hasattr(self, "view") or self.view.model() is None:
-            return
-        header = self.view.header()
-        if header.count() <= 0:
-            return
-        self.view.updateGeometries()
-        header.updateGeometry()
-        self.view.doItemsLayout()
-        self._repair_task_header_section_widths()
-        header.viewport().update()
-        self.view.viewport().update()
+        with measure_ui("main._apply_task_header_layout", visible=bool(self._is_task_table_visible())):
+            if not hasattr(self, "view") or self.view.model() is None:
+                return
+            header = self.view.header()
+            if header.count() <= 0:
+                return
+            signature = self._task_header_layout_signature_for_current_state()
+            repaired = self._repair_task_header_section_widths()
+            if signature == self._task_header_layout_signature and not repaired:
+                return
+            self.view.updateGeometries()
+            header.updateGeometry()
+            if repaired:
+                self.view.doItemsLayout()
+            header.viewport().update()
+            self.view.viewport().update()
+            self._task_header_layout_signature = signature
 
     def _schedule_task_header_layout(self):
         if self._task_header_layout_pending:
@@ -5335,7 +5511,7 @@ class MainWindow(QMainWindow):
         self._refresh_relationships_panel()
         self._apply_filters()
 
-        QTimer.singleShot(0, self._update_row_action_buttons)
+        self._schedule_row_action_button_update()
 
     def closeEvent(self, event):
         self._closing_down = True

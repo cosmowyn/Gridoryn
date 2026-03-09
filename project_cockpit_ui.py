@@ -542,6 +542,9 @@ class ProjectCockpitPanel(QWidget):
         self._loading_dashboard = False
         self._last_profile_signature = None
         self._last_baseline_signature = None
+        self._last_timeline_signature = None
+        self._pending_timeline_dashboard: dict | None = None
+        self._current_active_task_id: int | None = None
         self._profile_focus_widgets: set[QWidget] = set()
         self._baseline_focus_widgets: set[QWidget] = set()
         self._profile_save_timer = QTimer(self)
@@ -620,6 +623,7 @@ class ProjectCockpitPanel(QWidget):
             self._open_category_context_menu
         )
         self.project_combo.currentIndexChanged.connect(self._emit_project_change)
+        self.tabs.currentChanged.connect(self._on_current_tab_changed)
 
     def focus_target(self) -> QWidget | None:
         tab_name = str(self.tabs.tabText(self.tabs.currentIndex()) or "").strip().lower()
@@ -936,6 +940,7 @@ class ProjectCockpitPanel(QWidget):
 
     def _build_timeline_tab(self):
         page = QWidget()
+        self.timeline_tab_page = page
         layout = QVBoxLayout(page)
         configure_box_layout(layout)
         section = SectionPanel(
@@ -972,6 +977,59 @@ class ProjectCockpitPanel(QWidget):
         )
         section.body_layout.addWidget(self.timeline_stack, 1)
         self.tabs.addTab(page, "Timeline")
+
+    def _timeline_tab_active(self) -> bool:
+        return getattr(self, "timeline_tab_page", None) is not None and (
+            self.tabs.currentWidget() is self.timeline_tab_page
+        )
+
+    @staticmethod
+    def _timeline_signature(dashboard: dict | None):
+        if not dashboard:
+            return None
+        timeline_rows = tuple(
+            (
+                str(row.get("uid") or ""),
+                str(row.get("parent_uid") or ""),
+                str(row.get("kind") or ""),
+                str(row.get("label") or ""),
+                str(row.get("phase_name") or ""),
+                str(row.get("render_style") or ""),
+                str(row.get("status") or ""),
+                int(row.get("progress_percent") or 0),
+                bool(row.get("blocked")),
+                str(row.get("display_start_date") or row.get("start_date") or ""),
+                str(row.get("display_end_date") or row.get("end_date") or ""),
+                str(row.get("baseline_date") or ""),
+                int(row.get("sort_index") or 0),
+            )
+            for row in (dashboard.get("timeline_rows") or [])
+        )
+        dependencies = tuple(
+            sorted(
+                (
+                    str(dep.get("predecessor_kind") or ""),
+                    int(dep.get("predecessor_id") or 0),
+                    str(dep.get("successor_kind") or ""),
+                    int(dep.get("successor_id") or 0),
+                    bool(dep.get("is_soft")),
+                )
+                for dep in (dashboard.get("dependencies") or [])
+            )
+        )
+        return (timeline_rows, dependencies)
+
+    def _apply_timeline_dashboard_if_needed(self):
+        if self._pending_timeline_dashboard is None:
+            return
+        dashboard = self._pending_timeline_dashboard
+        self._pending_timeline_dashboard = None
+        self.timeline_widget.set_dashboard(dashboard)
+        self.timeline_widget.set_active_task(self._current_active_task_id)
+
+    def _on_current_tab_changed(self, _index: int):
+        if self._timeline_tab_active():
+            self._apply_timeline_dashboard_if_needed()
 
     def _build_capacity_tab(self):
         page = QWidget()
@@ -1259,6 +1317,8 @@ class ProjectCockpitPanel(QWidget):
             self._clear_tables()
             self._last_profile_signature = None
             self._last_baseline_signature = None
+            self._last_timeline_signature = None
+            self._pending_timeline_dashboard = None
             self._loading_dashboard = False
             return
 
@@ -1360,7 +1420,17 @@ class ProjectCockpitPanel(QWidget):
         self._populate_deliverables_table(deliverables)
         self._populate_register_table(register_entries)
         timeline_rows = list(dashboard.get("timeline_rows") or [])
-        self.timeline_widget.set_dashboard(dashboard)
+        timeline_signature = self._timeline_signature(dashboard)
+        if self._timeline_tab_active():
+            if timeline_signature != self._last_timeline_signature:
+                self.timeline_widget.set_dashboard(dashboard)
+                self._last_timeline_signature = timeline_signature
+                self._pending_timeline_dashboard = None
+        else:
+            self.timeline_widget.prime_dashboard_data(dashboard)
+            self._pending_timeline_dashboard = dashboard
+            if timeline_signature == self._last_timeline_signature:
+                self._pending_timeline_dashboard = None
         self.timeline_stack.set_has_content(bool(timeline_rows))
         self.timeline_summary.setText(
             f"{len(timeline_rows)} timeline row(s) across project structure, tasks, milestones, and deliverables."
@@ -1905,12 +1975,14 @@ class ProjectCockpitPanel(QWidget):
         milestone_id = self._selected_id_from_table(self.milestones_table)
         if milestone_id is None:
             return
+        self._apply_timeline_dashboard_if_needed()
         self.timeline_widget.select_item("milestone", int(milestone_id), ensure_visible=True)
 
     def _sync_timeline_from_deliverable_table(self):
         deliverable_id = self._selected_id_from_table(self.deliverables_table)
         if deliverable_id is None:
             return
+        self._apply_timeline_dashboard_if_needed()
         self.timeline_widget.select_item(
             "deliverable",
             int(deliverable_id),
@@ -2034,4 +2106,7 @@ class ProjectCockpitPanel(QWidget):
         self.editMilestoneDependenciesRequested.emit(int(item_id), payload["dependencies"])
 
     def set_active_task(self, task_id: int | None):
+        self._current_active_task_id = (
+            None if task_id is None else int(task_id)
+        )
         self.timeline_widget.set_active_task(task_id)

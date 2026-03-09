@@ -764,3 +764,29 @@ def test_project_cockpit_status_labels_wrap_inside_summary_form(qapp):
             label.alignment()
             & (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         ) == (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+
+
+def test_project_cockpit_defers_timeline_rebuild_until_timeline_tab_is_visible(qapp):
+    panel = ProjectCockpitPanel()
+    panel.tabs.setCurrentIndex(0)
+
+    panel.set_dashboard(_sample_dashboard())
+
+    assert panel.timeline_widget.bar_items == {}
+
+    panel.tabs.setCurrentWidget(panel.timeline_tab_page)
+    qapp.processEvents()
+
+    assert "task:2" in panel.timeline_widget.bar_items
+
+
+def test_project_cockpit_skips_identical_timeline_rebuilds(qapp):
+    panel = ProjectCockpitPanel()
+    panel.tabs.setCurrentWidget(panel.timeline_tab_page)
+    panel.set_dashboard(_sample_dashboard())
+    qapp.processEvents()
+
+    with patch.object(panel.timeline_widget, "set_dashboard") as set_dashboard:
+        panel.set_dashboard(_sample_dashboard())
+
+    set_dashboard.assert_not_called()

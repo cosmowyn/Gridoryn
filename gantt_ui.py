@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 from platform_utils import is_macos
 from project_management import parse_iso_date, today_local
 from ui_layout import add_left_aligned_buttons, configure_box_layout
+from ui_perf import measure_ui
 
 ROW_HEIGHT = 28
 HEADER_HEIGHT = 58
@@ -1294,12 +1295,16 @@ class ProjectGanttView(QWidget):
         return bool(row.get("editable_move") or row.get("editable_start") or row.get("editable_end"))
 
     def set_dashboard(self, dashboard: dict | None):
+        with measure_ui("gantt.set_dashboard", visible=self.isVisible()):
+            self.prime_dashboard_data(dashboard)
+            self._rebuild_tree()
+            self._rebuild_chart()
+            self._update_summary_label()
+
+    def prime_dashboard_data(self, dashboard: dict | None):
         self._dashboard = dashboard or {}
         self.rows = list((self._dashboard or {}).get("timeline_rows") or [])
         self.row_lookup = {str(row.get("uid") or ""): row for row in self.rows}
-        self._rebuild_tree()
-        self._rebuild_chart()
-        self._update_summary_label()
 
     def set_active_task(self, task_id: int | None):
         if task_id is None:
@@ -1365,43 +1370,46 @@ class ProjectGanttView(QWidget):
             self._select_uid_in_tree(current_uid, ensure_visible=False)
 
     def _rebuild_chart(self):
-        self._dependency_rebuild_pending = False
-        self._dependency_rebuild_timer.stop()
-        self._scroll_repaint_pending = False
-        self._scroll_repaint_timer.stop()
-        self.visible_rows = []
-        self.bar_items = {}
-        self.connector_items = []
-        self.scene.clear()
-        self._collect_visible_rows()
-        self._update_range()
-        self.header.set_range(self.range_start, self.range_end, self.pixels_per_day)
-        if not self.visible_rows or self.range_start is None or self.range_end is None:
-            self.scene.setSceneRect(0, 0, 240, 220)
-            return
+        with measure_ui("gantt._rebuild_chart", visible=self.isVisible()):
+            self._dependency_rebuild_pending = False
+            self._dependency_rebuild_timer.stop()
+            self._scroll_repaint_pending = False
+            self._scroll_repaint_timer.stop()
+            self.visible_rows = []
+            self.bar_items = {}
+            self.connector_items = []
+            self.scene.clear()
+            self._collect_visible_rows()
+            self._update_range()
+            self.header.set_range(self.range_start, self.range_end, self.pixels_per_day)
+            if not self.visible_rows or self.range_start is None or self.range_end is None:
+                self.scene.setSceneRect(0, 0, 240, 220)
+                return
 
-        total_days = max(1, (self.range_end - self.range_start).days + 1)
-        width = (
-            CHART_LEFT_MARGIN
-            + (total_days * self.pixels_per_day)
-            + CHART_RIGHT_MARGIN
-        )
-        height = max(220, len(self.visible_rows) * ROW_HEIGHT)
-        self.scene.setSceneRect(0, 0, width, height)
+            total_days = max(1, (self.range_end - self.range_start).days + 1)
+            width = (
+                CHART_LEFT_MARGIN
+                + (total_days * self.pixels_per_day)
+                + CHART_RIGHT_MARGIN
+            )
+            height = max(220, len(self.visible_rows) * ROW_HEIGHT)
+            self.scene.setSceneRect(0, 0, width, height)
 
-        for index, row in enumerate(self.visible_rows):
-            y = float(index * ROW_HEIGHT)
-            if _ensure_date(str(row.get("display_start_date") or row.get("start_date") or None)) is None:
-                continue
-            item = TimelineBarItem(self, row, y)
-            self.scene.addItem(item)
-            self.bar_items[str(row.get("uid") or "")] = item
+            for index, row in enumerate(self.visible_rows):
+                y = float(index * ROW_HEIGHT)
+                if _ensure_date(
+                    str(row.get("display_start_date") or row.get("start_date") or None)
+                ) is None:
+                    continue
+                item = TimelineBarItem(self, row, y)
+                self.scene.addItem(item)
+                self.bar_items[str(row.get("uid") or "")] = item
 
-        self._rebuild_dependency_paths()
-        self._update_summary_label()
-        self._invalidate_scene_layers()
-        if self.selected_uid:
-            self._ensure_selection_visible()
+            self._rebuild_dependency_paths()
+            self._update_summary_label()
+            self._invalidate_scene_layers()
+            if self.selected_uid:
+                self._ensure_selection_visible()
 
     def _collect_visible_rows(self):
         def walk(item: QTreeWidgetItem):
@@ -1518,57 +1526,67 @@ class ProjectGanttView(QWidget):
         return QRectF(start_x, top, width, bar_height)
 
     def _rebuild_dependency_paths(self):
-        dirty_rect = QRectF()
-        for item in self.connector_items:
-            dirty_rect = dirty_rect.united(item.sceneBoundingRect())
-            self.scene.removeItem(item)
-        self.connector_items = []
-        if not self._dashboard:
+        with measure_ui("gantt._rebuild_dependency_paths", visible=self.isVisible()):
+            dirty_rect = QRectF()
+            for item in self.connector_items:
+                dirty_rect = dirty_rect.united(item.sceneBoundingRect())
+                self.scene.removeItem(item)
+            self.connector_items = []
+            if not self._dashboard:
+                if not dirty_rect.isNull() and not dirty_rect.isEmpty():
+                    self._invalidate_scene_layers(
+                        QGraphicsScene.SceneLayer.ItemLayer,
+                        dirty_rect.adjusted(-6.0, -6.0, 6.0, 6.0),
+                    )
+                return
+            for dep in self._dashboard.get("dependencies") or []:
+                predecessor_uid = _timeline_uid(
+                    dep.get("predecessor_kind"),
+                    int(dep.get("predecessor_id") or 0),
+                )
+                successor_uid = _timeline_uid(
+                    dep.get("successor_kind"),
+                    int(dep.get("successor_id") or 0),
+                )
+                pre_item = self.bar_items.get(predecessor_uid)
+                succ_item = self.bar_items.get(successor_uid)
+                if pre_item is None or succ_item is None:
+                    continue
+                start = pre_item.anchor_end()
+                end = succ_item.anchor_start()
+                mid_x = max(start.x() + 18.0, end.x() - 18.0)
+                path = QPainterPath(start)
+                path.lineTo(mid_x, start.y())
+                path.lineTo(mid_x, end.y())
+                path.lineTo(end)
+                connector = QGraphicsPathItem(path)
+                pen = QPen(
+                    QColor("#DC2626") if succ_item.row.get("blocked") else QColor("#64748B"),
+                    1.4,
+                )
+                if bool(dep.get("is_soft")):
+                    pen.setStyle(Qt.PenStyle.DashLine)
+                connector.setPen(pen)
+                connector.setZValue(0)
+                connector.setToolTip(
+                    f"Dependency: {dep.get('predecessor_kind')} {dep.get('predecessor_id')} -> "
+                    f"{dep.get('successor_kind')} {dep.get('successor_id')}"
+                )
+                self.scene.addItem(connector)
+                self.connector_items.append(connector)
+                dirty_rect = dirty_rect.united(connector.sceneBoundingRect())
+                arrow = QGraphicsPathItem(self._arrow_path(end))
+                arrow.setPen(Qt.PenStyle.NoPen)
+                arrow.setBrush(pen.color())
+                arrow.setZValue(0)
+                self.scene.addItem(arrow)
+                self.connector_items.append(arrow)
+                dirty_rect = dirty_rect.united(arrow.sceneBoundingRect())
             if not dirty_rect.isNull() and not dirty_rect.isEmpty():
                 self._invalidate_scene_layers(
                     QGraphicsScene.SceneLayer.ItemLayer,
                     dirty_rect.adjusted(-6.0, -6.0, 6.0, 6.0),
                 )
-            return
-        for dep in self._dashboard.get("dependencies") or []:
-            predecessor_uid = _timeline_uid(dep.get("predecessor_kind"), int(dep.get("predecessor_id") or 0))
-            successor_uid = _timeline_uid(dep.get("successor_kind"), int(dep.get("successor_id") or 0))
-            pre_item = self.bar_items.get(predecessor_uid)
-            succ_item = self.bar_items.get(successor_uid)
-            if pre_item is None or succ_item is None:
-                continue
-            start = pre_item.anchor_end()
-            end = succ_item.anchor_start()
-            mid_x = max(start.x() + 18.0, end.x() - 18.0)
-            path = QPainterPath(start)
-            path.lineTo(mid_x, start.y())
-            path.lineTo(mid_x, end.y())
-            path.lineTo(end)
-            connector = QGraphicsPathItem(path)
-            pen = QPen(QColor("#DC2626") if succ_item.row.get("blocked") else QColor("#64748B"), 1.4)
-            if bool(dep.get("is_soft")):
-                pen.setStyle(Qt.PenStyle.DashLine)
-            connector.setPen(pen)
-            connector.setZValue(0)
-            connector.setToolTip(
-                f"Dependency: {dep.get('predecessor_kind')} {dep.get('predecessor_id')} -> "
-                f"{dep.get('successor_kind')} {dep.get('successor_id')}"
-            )
-            self.scene.addItem(connector)
-            self.connector_items.append(connector)
-            dirty_rect = dirty_rect.united(connector.sceneBoundingRect())
-            arrow = QGraphicsPathItem(self._arrow_path(end))
-            arrow.setPen(Qt.PenStyle.NoPen)
-            arrow.setBrush(pen.color())
-            arrow.setZValue(0)
-            self.scene.addItem(arrow)
-            self.connector_items.append(arrow)
-            dirty_rect = dirty_rect.united(arrow.sceneBoundingRect())
-        if not dirty_rect.isNull() and not dirty_rect.isEmpty():
-            self._invalidate_scene_layers(
-                QGraphicsScene.SceneLayer.ItemLayer,
-                dirty_rect.adjusted(-6.0, -6.0, 6.0, 6.0),
-            )
 
     def _schedule_dependency_rebuild(self):
         self._dependency_rebuild_pending = True
@@ -1593,16 +1611,17 @@ class ProjectGanttView(QWidget):
             self._scroll_repaint_timer.start(0)
 
     def _flush_scroll_repaint(self):
-        if not self._scroll_repaint_pending:
-            return
-        self._scroll_repaint_pending = False
-        rect = self._visible_scene_rect()
-        if rect.isNull() or rect.isEmpty():
-            return
-        self._invalidate_scene_layers(
-            QGraphicsScene.SceneLayer.AllLayers,
-            rect.adjusted(-16.0, -8.0, 16.0, 8.0),
-        )
+        with measure_ui("gantt._flush_scroll_repaint", visible=self.isVisible()):
+            if not self._scroll_repaint_pending:
+                return
+            self._scroll_repaint_pending = False
+            rect = self._visible_scene_rect()
+            if rect.isNull() or rect.isEmpty():
+                return
+            self._invalidate_scene_layers(
+                QGraphicsScene.SceneLayer.AllLayers,
+                rect.adjusted(-16.0, -8.0, 16.0, 8.0),
+            )
 
     def handle_view_scrolled(self, dx: int, dy: int):
         if dx == 0 and dy == 0:
@@ -1614,11 +1633,18 @@ class ProjectGanttView(QWidget):
         layers: QGraphicsScene.SceneLayer = QGraphicsScene.SceneLayer.AllLayers,
         rect: QRectF | None = None,
     ):
-        target = QRectF(rect) if rect is not None else QRectF(self.scene.sceneRect())
-        if target.isNull() or target.isEmpty():
-            target = QRectF(self.scene.sceneRect())
-        self.scene.invalidate(target, layers)
-        self.view.viewport().update()
+        with measure_ui("gantt._invalidate_scene_layers", visible=self.isVisible()):
+            target = QRectF(rect) if rect is not None else QRectF(self.scene.sceneRect())
+            if target.isNull() or target.isEmpty():
+                target = QRectF(self.scene.sceneRect())
+            self.scene.invalidate(target, layers)
+            viewport_rect = self.view.mapFromScene(target).boundingRect()
+            viewport_rect = viewport_rect.adjusted(-4, -4, 4, 4)
+            viewport_rect = viewport_rect.intersected(self.view.viewport().rect())
+            if viewport_rect.isNull() or viewport_rect.isEmpty():
+                self.view.viewport().update()
+                return
+            self.view.viewport().update(viewport_rect)
 
     @staticmethod
     def _arrow_path(point: QPointF) -> QPainterPath:
@@ -1843,11 +1869,12 @@ class ProjectGanttView(QWidget):
         )
 
     def preview_row_dates(self, uid: str, start: date | None, end: date | None):
-        item = self.bar_items.get(str(uid))
-        if item is None:
-            return
-        item.set_dates(start, end)
-        self._schedule_dependency_rebuild()
+        with measure_ui("gantt.preview_row_dates", visible=self.isVisible()):
+            item = self.bar_items.get(str(uid))
+            if item is None:
+                return
+            item.set_dates(start, end)
+            self._schedule_dependency_rebuild()
 
     def commit_row_dates(self, uid: str, start: date | None, end: date | None):
         row = self.row_lookup.get(str(uid))

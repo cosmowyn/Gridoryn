@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSettings
+from PySide6.QtGui import QImage, QPainter
+from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
 import main as main_module
 from main import MainWindow
@@ -176,6 +178,57 @@ def test_task_header_repairs_tiny_saved_section_widths(tmp_path, qapp, monkeypat
                 header.sectionSize(logical)
                 >= window._minimum_header_width_for_column(logical)
             )
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_semantic_row_coloring_is_limited_to_first_visible_cell(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        assert window.model.add_task_with_values("Color Test", due_date="2026-03-07")
+        task_id = int(window.model.last_added_task_id())
+        window._focus_task_by_id(task_id)
+        qapp.processEvents()
+
+        delegate = window.view.itemDelegate()
+        idx_desc = window.proxy.index(0, 0)
+        idx_due = window.proxy.index(0, 1)
+        def _paint_cell(index):
+            image = QImage(180, 42, QImage.Format.Format_ARGB32)
+            image.fill(window.view.palette().base().color())
+            option = QStyleOptionViewItem()
+            option.widget = window.view
+            option.rect = image.rect()
+            option.state = QStyle.StateFlag.State_Enabled
+            painter = QPainter(image)
+            delegate.paint(painter, option, index)
+            painter.end()
+            return image
+
+        desc_img = _paint_cell(idx_desc)
+        due_img = _paint_cell(idx_due)
+
+        desc_strip = desc_img.pixelColor(2, 21)
+        desc_body = desc_img.pixelColor(60, 21)
+        due_strip = due_img.pixelColor(2, 21)
+        due_body = due_img.pixelColor(60, 21)
+
+        assert desc_strip != desc_body
+        assert due_strip == due_body
+
+        header = window.view.header()
+        header.moveSection(header.visualIndex(1), 0)
+        qapp.processEvents()
+        desc_img_reordered = _paint_cell(idx_desc)
+        due_img_reordered = _paint_cell(idx_due)
+
+        assert desc_img_reordered.pixelColor(2, 21) == desc_img_reordered.pixelColor(60, 21)
+        assert due_img_reordered.pixelColor(2, 21) != due_img_reordered.pixelColor(60, 21)
     finally:
         window.close()
         qapp.processEvents()

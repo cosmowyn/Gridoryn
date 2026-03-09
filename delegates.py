@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QDate, QDateTime, QTime, Signal, QEvent
-from PySide6.QtGui import QPainter, QPen, QColor
+from PySide6.QtGui import QPainter, QPen, QColor, QBrush, QPalette
 from PySide6.QtWidgets import (
-    QStyledItemDelegate, QDateEdit, QSpinBox, QComboBox, QTreeView,
-    QWidget, QHBoxLayout, QToolButton, QPushButton
+    QApplication, QStyledItemDelegate, QDateEdit, QSpinBox, QComboBox, QTreeView,
+    QWidget, QHBoxLayout, QToolButton, QPushButton, QStyle, QStyleOptionViewItem
 )
 
 from model import STATUSES
@@ -204,6 +204,7 @@ class SmartDelegate(QStyledItemDelegate):
 
     EXTRA_VPAD = 10
     MIN_ROW_HEIGHT = 38
+    SEMANTIC_STRIP_WIDTH = 5
 
     def _install_editor_event_filters(self, root: QWidget):
         if root is None:
@@ -281,6 +282,54 @@ class SmartDelegate(QStyledItemDelegate):
             except Exception:
                 return []
         return []
+
+    def _source_node(self, index):
+        sm, src = self._source_model_and_index(index)
+        if sm is None or src is None or not src.isValid():
+            return None
+        try:
+            return src.internalPointer()
+        except Exception:
+            return None
+
+    def _is_task_row(self, index) -> bool:
+        node = self._source_node(index)
+        return bool(node and getattr(node, "task", None) is not None)
+
+    def _first_visible_logical_column(self) -> int:
+        view = self.parent()
+        if not isinstance(view, QTreeView):
+            return 0
+        header = view.header()
+        if header is None:
+            return 0
+        for visual in range(header.count()):
+            logical = header.logicalIndex(visual)
+            if logical >= 0 and not view.isColumnHidden(logical):
+                return logical
+        return 0
+
+    def _should_limit_semantic_row_color(self, index) -> bool:
+        if not self._is_task_row(index):
+            return False
+        return index.column() != self._first_visible_logical_column()
+
+    def _semantic_row_color(self, index) -> QColor | None:
+        if not self._is_task_row(index):
+            return None
+        bg = index.data(Qt.ItemDataRole.BackgroundRole)
+        return bg if isinstance(bg, QColor) and bg.isValid() else None
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        if not self._is_task_row(index):
+            return
+        option.backgroundBrush = QBrush()
+        if not (option.state & QStyle.StateFlag.State_Selected):
+            palette = option.widget.palette() if option.widget is not None else option.palette
+            text_color = palette.color(QPalette.ColorRole.Text)
+            option.palette.setColor(QPalette.ColorRole.Text, text_color)
+            option.palette.setColor(QPalette.ColorRole.WindowText, text_color)
 
     def _has_children(self, index) -> bool:
         idx0 = index.siblingAtColumn(0)
@@ -365,10 +414,28 @@ class SmartDelegate(QStyledItemDelegate):
         return super().eventFilter(editor, event)
 
     def paint(self, painter: QPainter, option, index):
-        super().paint(painter, option, index)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+
+        semantic_color = self._semantic_row_color(index)
+        if (
+            semantic_color is not None
+            and self._is_task_row(index)
+            and index.column() == self._first_visible_logical_column()
+            and not (opt.state & QStyle.StateFlag.State_Selected)
+        ):
+            strip_rect = opt.rect.adjusted(0, 0, 0, 0)
+            strip_rect.setWidth(min(self.SEMANTIC_STRIP_WIDTH, strip_rect.width()))
+            if strip_rect.width() > 0 and strip_rect.height() > 0:
+                painter.save()
+                painter.fillRect(strip_rect, semantic_color)
+                painter.restore()
+
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
 
         painter.save()
-        r = option.rect
+        r = opt.rect
 
         # Cell borders
         self._draw_side(painter, r.left(), r.top(), r.right(), r.top(), self._border_cfg(index, "cells", "top"))
