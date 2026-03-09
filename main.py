@@ -1424,6 +1424,37 @@ class MainWindow(QMainWindow):
             if hasattr(self, "_toggle_controls_act"):
                 self._toggle_controls_act.setChecked(True)
 
+    def _show_and_focus_dock(
+        self,
+        dock: QDockWidget | None,
+        focus_target,
+        *,
+        refresh=None,
+    ):
+        if dock is None:
+            return
+        dock.show()
+        if callable(refresh):
+            refresh()
+        if dock.isFloating():
+            dock.raise_()
+            dock.activateWindow()
+
+        def _apply_focus():
+            target = focus_target() if callable(focus_target) else focus_target
+            if target is not None:
+                try:
+                    target.setFocus(Qt.FocusReason.ShortcutFocusReason)
+                    return
+                except Exception:
+                    pass
+            try:
+                dock.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            except Exception:
+                pass
+
+        QTimer.singleShot(0, _apply_focus)
+
     def _focus_search_input(self):
         self._show_controls_dock()
         self.search.setFocus()
@@ -1433,6 +1464,86 @@ class MainWindow(QMainWindow):
         self._show_controls_dock()
         self.quick_add.setFocus()
         self.quick_add.selectAll()
+
+    def _focus_task_workspace(self):
+        if not self._is_task_table_visible():
+            self._set_tree_visible(True, show_message=False)
+        if self._is_task_table_floating():
+            win = self._ensure_floating_table_window()
+            win.show()
+            win.raise_()
+            win.activateWindow()
+
+        def _apply_focus():
+            try:
+                self.view.setFocus(Qt.FocusReason.ShortcutFocusReason)
+                idx = self.view.currentIndex()
+                if idx.isValid():
+                    self.view.scrollTo(idx)
+            except Exception:
+                pass
+
+        QTimer.singleShot(0, _apply_focus)
+
+    def _focus_details_panel(self):
+        self._show_and_focus_dock(
+            getattr(self, "details_dock", None),
+            lambda: getattr(self.details_panel, "notes", None),
+        )
+
+    def _focus_filters_panel(self):
+        self._show_and_focus_dock(
+            getattr(self, "filter_dock", None),
+            lambda: getattr(self.filter_panel, "tags_input", None),
+        )
+
+    def _focus_project_panel(self):
+        self._show_and_focus_dock(
+            getattr(self, "project_dock", None),
+            lambda: self.project_panel.focus_target(),
+            refresh=self._refresh_project_panel,
+        )
+
+    def _focus_relationships_panel(self):
+        self._show_and_focus_dock(
+            getattr(self, "relationships_dock", None),
+            lambda: self.relationships_panel.focus_target(),
+            refresh=self._refresh_relationships_panel,
+        )
+
+    def _focus_focus_panel(self):
+        self._show_and_focus_dock(
+            getattr(self, "focus_dock", None),
+            lambda: getattr(self.focus_panel, "list", None),
+            refresh=self._refresh_focus_panel,
+        )
+
+    def _focus_review_panel(self):
+        self._show_and_focus_dock(
+            getattr(self, "review_dock", None),
+            lambda: self.review_panel.focus_target(),
+            refresh=self._refresh_review_panel,
+        )
+
+    def _focus_calendar_panel(self):
+        self._show_and_focus_dock(
+            getattr(self, "calendar_dock", None),
+            lambda: getattr(self, "calendar", None),
+            refresh=self._refresh_calendar_list,
+        )
+
+    def _focus_analytics_panel(self):
+        self._show_and_focus_dock(
+            getattr(self, "analytics_dock", None),
+            lambda: getattr(self.analytics_panel, "trend_list", None),
+            refresh=self._refresh_analytics_panel,
+        )
+
+    def _focus_undo_history_panel(self):
+        self._show_and_focus_dock(
+            getattr(self, "undo_dock", None),
+            lambda: getattr(self, "undo_view", None),
+        )
 
     def _navigate_parent_relative(self, delta: int):
         state = self._collect_task_browser_state()
@@ -3448,16 +3559,19 @@ class MainWindow(QMainWindow):
         toggle_controls_act = QAction("Capture/navigation panel", self)
         toggle_controls_act.setCheckable(True)
         toggle_controls_act.setChecked(True)
+        toggle_controls_act.setShortcut(shortcut_sequence("Ctrl+Alt+C"))
         toggle_controls_act.triggered.connect(lambda checked: self.controls_dock.setVisible(bool(checked)))
 
         toggle_filters_act = QAction("Filters panel", self)
         toggle_filters_act.setCheckable(True)
         toggle_filters_act.setChecked(False)
+        toggle_filters_act.setShortcut(shortcut_sequence("Ctrl+Alt+3"))
         toggle_filters_act.triggered.connect(self._toggle_filters_dock)
 
         toggle_table_act = QAction("Task table", self)
         toggle_table_act.setCheckable(True)
         toggle_table_act.setChecked(True)
+        toggle_table_act.setShortcut(shortcut_sequence("Ctrl+Alt+1"))
         toggle_table_act.triggered.connect(self._set_tree_visible)
 
         float_table_act = QAction("Float task table", self)
@@ -3468,44 +3582,100 @@ class MainWindow(QMainWindow):
         toggle_details_act = QAction("Details panel", self)
         toggle_details_act.setCheckable(True)
         toggle_details_act.setChecked(True)
+        toggle_details_act.setShortcut(shortcut_sequence("Ctrl+Alt+2"))
         toggle_details_act.triggered.connect(lambda checked: self.details_dock.setVisible(bool(checked)))
 
         toggle_project_act = QAction("Project cockpit", self)
         toggle_project_act.setCheckable(True)
         toggle_project_act.setChecked(False)
-        toggle_project_act.setShortcut(shortcut_sequence("Ctrl+Shift+J"))
+        toggle_project_act.setShortcuts(
+            [
+                shortcut_sequence("Ctrl+Alt+4"),
+                shortcut_sequence("Ctrl+Shift+J"),
+            ]
+        )
         toggle_project_act.triggered.connect(lambda checked: self.project_dock.setVisible(bool(checked)))
 
         toggle_relationships_act = QAction("Relationship inspector", self)
         toggle_relationships_act.setCheckable(True)
         toggle_relationships_act.setChecked(False)
+        toggle_relationships_act.setShortcut(shortcut_sequence("Ctrl+Alt+5"))
         toggle_relationships_act.triggered.connect(lambda checked: self.relationships_dock.setVisible(bool(checked)))
 
         toggle_undo_history_act = QAction("Undo history", self)
         toggle_undo_history_act.setCheckable(True)
         toggle_undo_history_act.setChecked(False)
+        toggle_undo_history_act.setShortcut(shortcut_sequence("Ctrl+Alt+0"))
         toggle_undo_history_act.triggered.connect(lambda checked: self.undo_dock.setVisible(bool(checked)))
 
         toggle_focus_act = QAction("Focus mode", self)
         toggle_focus_act.setCheckable(True)
         toggle_focus_act.setChecked(False)
-        toggle_focus_act.setShortcut(shortcut_sequence("Ctrl+Shift+F"))
+        toggle_focus_act.setShortcuts(
+            [
+                shortcut_sequence("Ctrl+Alt+6"),
+                shortcut_sequence("Ctrl+Shift+F"),
+            ]
+        )
         toggle_focus_act.triggered.connect(lambda checked: self.focus_dock.setVisible(bool(checked)))
 
         toggle_calendar_act = QAction("Calendar/agenda", self)
         toggle_calendar_act.setCheckable(True)
         toggle_calendar_act.setChecked(False)
+        toggle_calendar_act.setShortcut(shortcut_sequence("Ctrl+Alt+8"))
         toggle_calendar_act.triggered.connect(lambda checked: self.calendar_dock.setVisible(bool(checked)))
 
         toggle_review_act = QAction("Review workflow", self)
         toggle_review_act.setCheckable(True)
         toggle_review_act.setChecked(False)
+        toggle_review_act.setShortcut(shortcut_sequence("Ctrl+Alt+7"))
         toggle_review_act.triggered.connect(lambda checked: self.review_dock.setVisible(bool(checked)))
 
         toggle_analytics_act = QAction("Analytics", self)
         toggle_analytics_act.setCheckable(True)
         toggle_analytics_act.setChecked(False)
+        toggle_analytics_act.setShortcut(shortcut_sequence("Ctrl+Alt+9"))
         toggle_analytics_act.triggered.connect(lambda checked: self.analytics_dock.setVisible(bool(checked)))
+
+        focus_workspace_act = QAction("Focus task workspace", self)
+        focus_workspace_act.setShortcut(shortcut_sequence("Ctrl+1"))
+        focus_workspace_act.triggered.connect(self._focus_task_workspace)
+
+        focus_details_act = QAction("Focus details panel", self)
+        focus_details_act.setShortcut(shortcut_sequence("Ctrl+2"))
+        focus_details_act.triggered.connect(self._focus_details_panel)
+
+        focus_filters_act = QAction("Focus filters panel", self)
+        focus_filters_act.setShortcut(shortcut_sequence("Ctrl+3"))
+        focus_filters_act.triggered.connect(self._focus_filters_panel)
+
+        focus_project_act = QAction("Focus project cockpit", self)
+        focus_project_act.setShortcut(shortcut_sequence("Ctrl+4"))
+        focus_project_act.triggered.connect(self._focus_project_panel)
+
+        focus_relationships_act = QAction("Focus relationship inspector", self)
+        focus_relationships_act.setShortcut(shortcut_sequence("Ctrl+5"))
+        focus_relationships_act.triggered.connect(self._focus_relationships_panel)
+
+        focus_focus_mode_act = QAction("Focus focus mode", self)
+        focus_focus_mode_act.setShortcut(shortcut_sequence("Ctrl+6"))
+        focus_focus_mode_act.triggered.connect(self._focus_focus_panel)
+
+        focus_review_act = QAction("Focus review workflow", self)
+        focus_review_act.setShortcut(shortcut_sequence("Ctrl+7"))
+        focus_review_act.triggered.connect(self._focus_review_panel)
+
+        focus_calendar_act = QAction("Focus calendar / agenda", self)
+        focus_calendar_act.setShortcut(shortcut_sequence("Ctrl+8"))
+        focus_calendar_act.triggered.connect(self._focus_calendar_panel)
+
+        focus_analytics_act = QAction("Focus analytics", self)
+        focus_analytics_act.setShortcut(shortcut_sequence("Ctrl+9"))
+        focus_analytics_act.triggered.connect(self._focus_analytics_panel)
+
+        focus_undo_history_act = QAction("Focus undo history", self)
+        focus_undo_history_act.setShortcut(shortcut_sequence("Ctrl+0"))
+        focus_undo_history_act.triggered.connect(self._focus_undo_history_panel)
 
         collapse_all_act = QAction("Collapse all", self)
         collapse_all_act.setShortcut(shortcut_sequence("Ctrl+Alt+Up"))
@@ -3580,15 +3750,19 @@ class MainWindow(QMainWindow):
         help_shortcuts_act.triggered.connect(lambda: self._open_help_anchor("shortcuts"))
 
         diagnostics_act = QAction("Diagnostics…", self)
+        diagnostics_act.setShortcut(shortcut_sequence("Ctrl+Alt+D"))
         diagnostics_act.triggered.connect(self._open_diagnostics_dialog)
 
         log_viewer_act = QAction("Application log…", self)
+        log_viewer_act.setShortcut(shortcut_sequence("Ctrl+Alt+L"))
         log_viewer_act.triggered.connect(self._open_log_viewer_dialog)
 
         snapshot_history_act = QAction("Snapshot history…", self)
+        snapshot_history_act.setShortcut(shortcut_sequence("Ctrl+Alt+H"))
         snapshot_history_act.triggered.connect(self._open_snapshot_history_dialog)
 
         workspace_profiles_act = QAction("Workspace profiles…", self)
+        workspace_profiles_act.setShortcut(shortcut_sequence("Ctrl+Alt+W"))
         workspace_profiles_act.triggered.connect(self._open_workspace_manager)
 
         command_palette_act = QAction("Command palette…", self)
@@ -3702,6 +3876,19 @@ class MainWindow(QMainWindow):
         m_view.addAction(log_viewer_act)
         m_view.addSeparator()
 
+        m_focus = m_view.addMenu("Focus")
+        m_focus.addAction(focus_workspace_act)
+        m_focus.addAction(focus_details_act)
+        m_focus.addAction(focus_filters_act)
+        m_focus.addAction(focus_project_act)
+        m_focus.addAction(focus_relationships_act)
+        m_focus.addAction(focus_focus_mode_act)
+        m_focus.addAction(focus_review_act)
+        m_focus.addAction(focus_calendar_act)
+        m_focus.addAction(focus_analytics_act)
+        m_focus.addAction(focus_undo_history_act)
+        m_view.addSeparator()
+
         m_saved_views = m_view.addMenu("Saved filter views")
         m_saved_views.addAction(save_view_act)
         m_saved_views.addAction(load_view_act)
@@ -3799,6 +3986,16 @@ class MainWindow(QMainWindow):
         self._toggle_review_act = toggle_review_act
         self._toggle_analytics_act = toggle_analytics_act
         self._toggle_tooltips_act = toggle_tooltips_act
+        self._focus_workspace_act = focus_workspace_act
+        self._focus_details_act = focus_details_act
+        self._focus_filters_act = focus_filters_act
+        self._focus_project_act = focus_project_act
+        self._focus_relationships_act = focus_relationships_act
+        self._focus_focus_mode_act = focus_focus_mode_act
+        self._focus_review_act = focus_review_act
+        self._focus_calendar_act = focus_calendar_act
+        self._focus_analytics_act = focus_analytics_act
+        self._focus_undo_history_act = focus_undo_history_act
 
         add_shortcut_act = QAction(self)
         add_shortcut_act.setShortcut(QKeySequence("+"))
@@ -3835,6 +4032,16 @@ class MainWindow(QMainWindow):
         self.addAction(snapshot_history_act)
         self.addAction(workspace_profiles_act)
         self.addAction(browse_archive_act)
+        self.addAction(focus_workspace_act)
+        self.addAction(focus_details_act)
+        self.addAction(focus_filters_act)
+        self.addAction(focus_project_act)
+        self.addAction(focus_relationships_act)
+        self.addAction(focus_focus_mode_act)
+        self.addAction(focus_review_act)
+        self.addAction(focus_calendar_act)
+        self.addAction(focus_analytics_act)
+        self.addAction(focus_undo_history_act)
         self.view.addAction(edit_current_act)
         self.view.addAction(edit_current_numpad_act)
         self.addAction(toggle_expand_act)
@@ -3866,6 +4073,16 @@ class MainWindow(QMainWindow):
             (toggle_calendar_act, "Show or hide the Calendar/Agenda dock."),
             (toggle_review_act, "Show or hide the guided Review Workflow dock."),
             (toggle_analytics_act, "Show or hide analytics summary dashboard."),
+            (focus_workspace_act, "Show the task workspace if needed and move keyboard focus into the task tree."),
+            (focus_details_act, "Show the Details dock if needed and move keyboard focus into the details editor."),
+            (focus_filters_act, "Show the Filters dock if needed and move keyboard focus into the filter controls."),
+            (focus_project_act, "Show the project cockpit if needed and focus the current project workspace."),
+            (focus_relationships_act, "Show the relationship inspector if needed and focus its current related-items list."),
+            (focus_focus_mode_act, "Show Focus mode if needed and focus the current focus list."),
+            (focus_review_act, "Show the Review Workflow dock if needed and focus the current review category list."),
+            (focus_calendar_act, "Show the Calendar / Agenda dock if needed and focus the calendar view."),
+            (focus_analytics_act, "Show the Analytics dock if needed and focus its trend list."),
+            (focus_undo_history_act, "Show the Undo History dock if needed and focus the undo list."),
             (collapse_all_act, "Collapse every branch in the task tree."),
             (expand_all_act, "Expand every branch in the task tree."),
             (move_up_act, "Move selected task one row up among siblings."),

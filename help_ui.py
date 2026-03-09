@@ -480,7 +480,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><strong>Double-click empty timeline space to add a new task at that date</strong>. The new bar is selected immediately so you can drag or resize it without leaving the chart.</li>
             <li><strong>Milestones use a dedicated diamond marker</strong>, while summary rows roll up child spans and dependencies draw as visible connectors across the chart.</li>
             <li><strong>The timeline includes Today, Selected, Fit project, and Fit selection controls</strong>, along with Day, Week, and Month zoom levels.</li>
-            <li><strong>Ctrl+mouse-wheel zooms the chart</strong>, and the left/right arrow keys nudge the selected item by day. Use <code>Alt+Left/Right</code> to resize task starts and <code>Shift+Left/Right</code> to resize task ends.</li>
+            <li><strong>{_sc("Ctrl")}+mouse-wheel zooms the chart</strong> and supported trackpad pinch gestures use the same zoom state. The left/right arrow keys nudge the selected item by day. Use <code>Alt+Left/Right</code> to resize task starts and <code>Shift+Left/Right</code> to resize task ends.</li>
             <li><strong>Right-click the chart for contextual planning actions</strong> such as adding tasks, child tasks, milestones, deliverables, dependency editing, row movement, and view navigation.</li>
             <li><strong>Timeline selection stays synchronized</strong> with the project cockpit tables, task tree, details panel, and relationship inspector.</li>
             <li><strong>Timeline rescheduling participates in undo/redo</strong>, including milestone and deliverable date moves.</li>
@@ -758,11 +758,40 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li>{_sc("Ctrl+L")} Focus quick add</li>
             <li>{_sc("Ctrl+Alt+Space")} Open quick capture</li>
             <li>{_sc("Ctrl+Shift+P")} Open command palette</li>
-            <li>{_sc("Ctrl+Shift+F")} Toggle focus mode</li>
-            <li>Relationship inspector, workspace profiles, and snapshot history are available from the command palette for keyboard-first access.</li>
             <li><code>F1</code> Open the embedded help guide</li>
             <li>{_sc(QKeySequence.StandardKey.Undo)} Undo (platform standard)</li>
             <li>{_sc(QKeySequence.StandardKey.Redo)} Redo (platform standard)</li>
+        </ul>
+        <p><strong>View focus</strong></p>
+        <ul>
+            <li>{_sc("Ctrl+1")} Focus task workspace</li>
+            <li>{_sc("Ctrl+2")} Focus details panel</li>
+            <li>{_sc("Ctrl+3")} Focus filters panel</li>
+            <li>{_sc("Ctrl+4")} Focus project cockpit</li>
+            <li>{_sc("Ctrl+5")} Focus relationship inspector</li>
+            <li>{_sc("Ctrl+6")} Focus focus mode</li>
+            <li>{_sc("Ctrl+7")} Focus review workflow</li>
+            <li>{_sc("Ctrl+8")} Focus calendar / agenda</li>
+            <li>{_sc("Ctrl+9")} Focus analytics</li>
+            <li>{_sc("Ctrl+0")} Focus undo history</li>
+        </ul>
+        <p><strong>View toggles and tools</strong></p>
+        <ul>
+            <li>{_sc("Ctrl+Alt+C")} Toggle capture/navigation panel</li>
+            <li>{_sc("Ctrl+Alt+1")} Toggle task table</li>
+            <li>{_sc("Ctrl+Alt+2")} Toggle details panel</li>
+            <li>{_sc("Ctrl+Alt+3")} Toggle filters panel</li>
+            <li>{_sc("Ctrl+Alt+4")} Toggle project cockpit</li>
+            <li>{_sc("Ctrl+Alt+5")} Toggle relationship inspector</li>
+            <li>{_sc("Ctrl+Alt+6")} Toggle focus mode</li>
+            <li>{_sc("Ctrl+Alt+7")} Toggle review workflow</li>
+            <li>{_sc("Ctrl+Alt+8")} Toggle calendar / agenda</li>
+            <li>{_sc("Ctrl+Alt+9")} Toggle analytics</li>
+            <li>{_sc("Ctrl+Alt+0")} Toggle undo history</li>
+            <li>{_sc("Ctrl+Alt+W")} Open workspace profiles</li>
+            <li>{_sc("Ctrl+Alt+H")} Open snapshot history</li>
+            <li>{_sc("Ctrl+Alt+D")} Open diagnostics</li>
+            <li>{_sc("Ctrl+Alt+L")} Open application log</li>
         </ul>
         <p><strong>Tree actions</strong></p>
         <ul>

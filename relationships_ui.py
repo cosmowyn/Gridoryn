@@ -214,6 +214,9 @@ class RelationshipsPanel(QWidget):
     def minimumSizeHint(self) -> QSize:
         return QSize(360, 440)
 
+    def focus_target(self) -> QListWidget | None:
+        return self._current_list()
+
     def _current_list(self) -> QListWidget | None:
         current_page = self.tabs.currentWidget()
         if isinstance(current_page, QWidget):

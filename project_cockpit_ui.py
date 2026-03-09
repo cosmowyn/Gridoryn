@@ -604,6 +604,20 @@ class ProjectCockpitPanel(QWidget):
 
         self.project_combo.currentIndexChanged.connect(self._emit_project_change)
 
+    def focus_target(self) -> QWidget | None:
+        tab_name = str(self.tabs.tabText(self.tabs.currentIndex()) or "").strip().lower()
+        if tab_name == "milestones":
+            return self.milestones_table
+        if tab_name == "deliverables":
+            return self.deliverables_table
+        if tab_name == "risks / issues":
+            return self.register_table
+        if tab_name == "timeline":
+            return self.timeline_widget.view
+        if tab_name == "workload":
+            return self.day_table
+        return self.project_combo
+
     def _build_overview_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)

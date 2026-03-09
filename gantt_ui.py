@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 from PySide6.QtCore import (
     QByteArray,
+    QEvent,
     QMimeData,
     QPoint,
     QPointF,
@@ -21,6 +22,7 @@ from PySide6.QtGui import (
     QFontMetrics,
     QFontMetricsF,
     QIcon,
+    QNativeGestureEvent,
     QPainter,
     QPainterPath,
     QPen,
@@ -46,6 +48,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from platform_utils import is_macos
 from project_management import parse_iso_date, today_local
 from ui_layout import add_left_aligned_buttons, configure_box_layout
 
@@ -238,12 +241,39 @@ class PlannerGraphicsView(QGraphicsView):
         super().__init__(scene)
         self.owner = owner
 
+    @staticmethod
+    def _zoom_modifier_active(modifiers) -> bool:
+        required = (
+            Qt.KeyboardModifier.MetaModifier
+            if is_macos()
+            else Qt.KeyboardModifier.ControlModifier
+        )
+        return bool(modifiers & required)
+
     def wheelEvent(self, event):
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            self.owner._step_zoom(1 if event.angleDelta().y() > 0 else -1)
-            event.accept()
-            return
+        if self._zoom_modifier_active(event.modifiers()):
+            delta_y = int(event.angleDelta().y())
+            if delta_y == 0:
+                delta_y = int(event.pixelDelta().y())
+            if delta_y != 0:
+                self.owner.zoom_from_pointer_delta(delta_y, event.position())
+                event.accept()
+                return
         super().wheelEvent(event)
+
+    def viewportEvent(self, event):
+        if event.type() == QEvent.Type.NativeGesture:
+            if (
+                isinstance(event, QNativeGestureEvent)
+                and event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture
+            ):
+                self.owner.zoom_from_pinch_delta(
+                    float(event.value()),
+                    event.position(),
+                )
+                event.accept()
+                return True
+        return super().viewportEvent(event)
 
     def keyPressEvent(self, event):
         key = event.key()
@@ -1079,8 +1109,9 @@ class ProjectGanttView(QWidget):
         self.zoom_panel = QWidget()
         self.zoom_panel.setObjectName("GanttZoomPanel")
         self.zoom_panel.setToolTip(
-            "Timeline zoom controls. Use the preset selector or the zoom "
-            "buttons to change the visible timeline scale."
+            "Timeline zoom controls. Use the preset selector, zoom buttons, "
+            "Command/Ctrl + mouse wheel, or trackpad pinch to change the "
+            "visible timeline scale."
         )
         zoom_panel_layout = QHBoxLayout(self.zoom_panel)
         configure_box_layout(
@@ -1484,6 +1515,16 @@ class ProjectGanttView(QWidget):
         )
         return self.scene_x_to_date(float(viewport_center))
 
+    def _date_anchor_for_viewport_pos(
+        self,
+        viewport_pos: QPointF | QPoint | None,
+    ) -> tuple[date | None, float | None]:
+        if self.range_start is None or viewport_pos is None:
+            return None, None
+        x = float(viewport_pos.x())
+        scene_x = float(self.view.horizontalScrollBar().value()) + x
+        return self.scene_x_to_date(scene_x), x
+
     def _center_date_in_view(self, target_date: date | None):
         if target_date is None or self.range_start is None:
             return
@@ -1492,12 +1533,30 @@ class ProjectGanttView(QWidget):
             int(max(0.0, x - (self.view.viewport().width() / 2.0)))
         )
 
+    def _anchor_date_in_view(
+        self,
+        target_date: date | None,
+        viewport_x: float | None,
+    ):
+        if (
+            target_date is None
+            or viewport_x is None
+            or self.range_start is None
+        ):
+            return
+        x = self.date_to_scene_x(target_date)
+        self.view.horizontalScrollBar().setValue(
+            int(max(0.0, x - float(viewport_x)))
+        )
+
     def _set_zoom_pixels_per_day(
         self,
         pixels_per_day: float,
         *,
         mode: str,
         center_date: date | None = None,
+        anchor_date: date | None = None,
+        anchor_viewport_x: float | None = None,
     ):
         clamped = max(MIN_PIXELS_PER_DAY, min(MAX_PIXELS_PER_DAY, float(pixels_per_day)))
         self.pixels_per_day = clamped
@@ -1505,7 +1564,9 @@ class ProjectGanttView(QWidget):
         self._zoom_preset_key = self._preset_for_pixels(clamped)
         self._sync_zoom_controls()
         self._rebuild_chart()
-        if center_date is not None:
+        if anchor_date is not None and anchor_viewport_x is not None:
+            self._anchor_date_in_view(anchor_date, anchor_viewport_x)
+        elif center_date is not None:
             self._center_date_in_view(center_date)
 
     @staticmethod
@@ -1543,12 +1604,43 @@ class ProjectGanttView(QWidget):
 
     def _step_zoom(self, direction: int):
         factor = 1.2 if int(direction) > 0 else (1.0 / 1.2)
-        center_date = self._visible_center_date()
+        self._zoom_with_factor(factor)
+
+    def _zoom_with_factor(
+        self,
+        factor: float,
+        *,
+        viewport_pos: QPointF | QPoint | None = None,
+    ):
+        anchor_date, anchor_x = self._date_anchor_for_viewport_pos(viewport_pos)
+        center_date = None if anchor_date is not None else self._visible_center_date()
         self._set_zoom_pixels_per_day(
-            self.pixels_per_day * factor,
+            self.pixels_per_day * float(factor),
             mode="custom",
             center_date=center_date,
+            anchor_date=anchor_date,
+            anchor_viewport_x=anchor_x,
         )
+
+    def zoom_from_pointer_delta(
+        self,
+        delta_y: float,
+        viewport_pos: QPointF | QPoint | None = None,
+    ):
+        if float(delta_y) == 0.0:
+            return
+        factor = 1.2 if float(delta_y) > 0.0 else (1.0 / 1.2)
+        self._zoom_with_factor(factor, viewport_pos=viewport_pos)
+
+    def zoom_from_pinch_delta(
+        self,
+        pinch_value: float,
+        viewport_pos: QPointF | QPoint | None = None,
+    ):
+        if abs(float(pinch_value)) < 0.001:
+            return
+        factor = max(0.5, min(2.0, 1.0 + float(pinch_value)))
+        self._zoom_with_factor(factor, viewport_pos=viewport_pos)
 
     def jump_to_today(self):
         if self.range_start is None:

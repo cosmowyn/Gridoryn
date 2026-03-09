@@ -198,6 +198,9 @@ class ReviewWorkflowPanel(QWidget):
     def minimumSizeHint(self) -> QSize:
         return QSize(380, 460)
 
+    def focus_target(self) -> QListWidget | None:
+        return self._current_list()
+
     def _emit_refresh(self):
         self.refreshRequested.emit(
             int(self.waiting_days.value()),

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QFontMetrics, QNativeGestureEvent, QPointingDevice, QWheelEvent
 
 from gantt_ui import (
     MAX_PIXELS_PER_DAY,
@@ -12,6 +12,7 @@ from gantt_ui import (
     TimelineHeaderWidget,
     _text_layout,
 )
+from platform_utils import is_macos
 from project_cockpit_ui import ProjectCockpitPanel
 from project_management import build_timeline_rows
 
@@ -297,6 +298,66 @@ def test_gantt_view_fit_modes_update_visible_zoom_state(qapp):
     widget.fit_selection()
     qapp.processEvents()
     assert widget.zoom_state_label.text().startswith("Zoom: Fit selection")
+    assert widget.header._pixels_per_day == widget.pixels_per_day
+
+
+def test_gantt_view_modifier_wheel_zoom_uses_shared_zoom_state(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+    widget.show()
+    qapp.processEvents()
+
+    before = float(widget.pixels_per_day)
+    modifiers = (
+        Qt.KeyboardModifier.MetaModifier
+        if is_macos()
+        else Qt.KeyboardModifier.ControlModifier
+    )
+    event = QWheelEvent(
+        QPointF(180.0, 40.0),
+        QPointF(180.0, 40.0),
+        QPoint(0, 0),
+        QPoint(0, 120),
+        Qt.MouseButton.NoButton,
+        modifiers,
+        Qt.ScrollPhase.ScrollUpdate,
+        False,
+    )
+
+    widget.view.wheelEvent(event)
+    qapp.processEvents()
+
+    assert event.isAccepted()
+    assert widget.pixels_per_day > before
+    assert widget.header._pixels_per_day == widget.pixels_per_day
+    assert "Zoom:" in widget.zoom_state_label.text()
+
+
+def test_gantt_view_native_pinch_zoom_uses_shared_zoom_state(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+    widget.show()
+    qapp.processEvents()
+
+    before = float(widget.pixels_per_day)
+    event = QNativeGestureEvent(
+        Qt.NativeGestureType.ZoomNativeGesture,
+        QPointingDevice.primaryPointingDevice(),
+        2,
+        QPointF(220.0, 50.0),
+        QPointF(220.0, 50.0),
+        QPointF(220.0, 50.0),
+        0.2,
+        QPointF(0.0, 0.0),
+    )
+
+    handled = widget.view.viewportEvent(event)
+    qapp.processEvents()
+
+    assert handled is True
+    assert widget.pixels_per_day > before
     assert widget.header._pixels_per_day == widget.pixels_per_day
 
 
