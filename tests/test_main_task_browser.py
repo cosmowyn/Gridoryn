@@ -170,6 +170,8 @@ def test_task_header_repairs_tiny_saved_section_widths(tmp_path, qapp, monkeypat
 
     window = _build_window(tmp_path, qapp, monkeypatch)
     try:
+        window._set_tree_visible(True, show_message=False)
+        qapp.processEvents()
         header = window.view.header()
         for logical in range(min(4, window.proxy.columnCount())):
             if window.view.isColumnHidden(logical):

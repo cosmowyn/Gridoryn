@@ -515,7 +515,7 @@ class MainWindow(QMainWindow):
     # ---------- Splash (close again once UI shows) ----------
     def showEvent(self, event):
         super().showEvent(event)
-        self._apply_task_header_layout()
+        self._apply_task_header_layout(force=True)
         self._schedule_row_action_button_update()
         try:
             import pyi_splash  # type: ignore
@@ -1079,6 +1079,9 @@ class MainWindow(QMainWindow):
 
         self.details_dock.visibilityChanged.connect(
             lambda vis: self._toggle_details_act.setChecked(bool(vis)) if hasattr(self, "_toggle_details_act") else None
+        )
+        self.details_dock.visibilityChanged.connect(
+            lambda vis: self._refresh_details_dock() if vis else None
         )
 
     def _init_project_dock(self):
@@ -1961,16 +1964,25 @@ class MainWindow(QMainWindow):
                 else None
             )
             self._update_active_task_status_label(details)
-            if hasattr(self, "details_panel"):
+            if (
+                hasattr(self, "details_panel")
+                and hasattr(self, "details_dock")
+                and self.details_dock.isVisible()
+            ):
                 self.details_panel.set_task_details(details)
             self._refresh_project_panel_from_details(details)
             self._refresh_relationships_panel_from_details(details)
-            if hasattr(self, "focus_panel"):
+            if (
+                hasattr(self, "focus_panel")
+                and hasattr(self, "focus_dock")
+                and self.focus_dock.isVisible()
+            ):
                 self.focus_panel.set_current_summary(
                     self._focus_current_summary(details),
                     self._active_task_id,
                 )
-            self._refresh_task_browser()
+            if hasattr(self, "details_dock") and self.details_dock.isVisible():
+                self._refresh_task_browser()
 
     def _refresh_details_dock(self):
         self._refresh_active_task_views()
@@ -5417,12 +5429,19 @@ class MainWindow(QMainWindow):
             tuple(bool(self.view.isColumnHidden(i)) for i in range(self.proxy.columnCount())),
         )
 
-    def _apply_task_header_layout(self):
+    def _apply_task_header_layout(self, *, force: bool = False):
         with measure_ui("main._apply_task_header_layout", visible=bool(self._is_task_table_visible())):
             if not hasattr(self, "view") or self.view.model() is None:
                 return
             header = self.view.header()
             if header.count() <= 0:
+                return
+            if not self._is_task_table_visible():
+                return
+            if not force and not self.isVisible():
+                return
+            if not force and (self.view.width() <= 0 or header.width() <= 0):
+                self._schedule_task_header_layout()
                 return
             signature = self._task_header_layout_signature_for_current_state()
             repaired = self._repair_task_header_section_widths()
