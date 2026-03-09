@@ -55,6 +55,8 @@ from ui_layout import add_left_aligned_buttons, configure_box_layout
 ROW_HEIGHT = 28
 HEADER_HEIGHT = 58
 LEFT_COLUMN_WIDTH = 300
+CHART_LEFT_MARGIN = 24.0
+CHART_RIGHT_MARGIN = 40.0
 DAY_MARGIN_BEFORE = 3
 DAY_MARGIN_AFTER = 10
 HANDLE_WIDTH = 7.0
@@ -366,6 +368,17 @@ class TimelineHeaderWidget(QWidget):
             min(height, max(18, major_band.height() - 6)),
         )
 
+    def _scene_x_for(self, value: date) -> int:
+        if self._range_start is None:
+            return int(round(CHART_LEFT_MARGIN - self._scroll_x))
+        return int(
+            round(
+                CHART_LEFT_MARGIN
+                + ((value - self._range_start).days * self._pixels_per_day)
+                - self._scroll_x
+            )
+        )
+
     @staticmethod
     def _month_start(value: date) -> date:
         return date(value.year, value.month, 1)
@@ -454,7 +467,8 @@ class TimelineHeaderWidget(QWidget):
         if self._range_start <= today <= self._range_end:
             today_x = int(
                 round(
-                    ((today - self._range_start).days * self._pixels_per_day)
+                    CHART_LEFT_MARGIN
+                    + ((today - self._range_start).days * self._pixels_per_day)
                     - self._scroll_x
                 )
             )
@@ -496,21 +510,13 @@ class TimelineHeaderWidget(QWidget):
             )
             painter.restore()
 
-        def scene_x_for(day_value: date) -> int:
-            return int(
-                round(
-                    ((day_value - self._range_start).days * self._pixels_per_day)
-                    - self._scroll_x
-                )
-            )
-
         current = self._month_start(self._range_start)
         painter.setPen(text_color)
         while current <= self._range_end:
             next_current = self._next_month(current)
             label = self._major_label_for(current)
-            start_x = scene_x_for(current)
-            end_x = scene_x_for(next_current)
+            start_x = self._scene_x_for(current)
+            end_x = self._scene_x_for(next_current)
             band_rect = QRectF(
                 start_x,
                 major_band.top(),
@@ -533,8 +539,8 @@ class TimelineHeaderWidget(QWidget):
 
         current = self._range_start
         while current <= self._range_end:
-            x = scene_x_for(current)
-            next_x = scene_x_for(current + timedelta(days=1))
+            x = self._scene_x_for(current)
+            next_x = self._scene_x_for(current + timedelta(days=1))
             if x < -48 or x > view_width + 48:
                 current += timedelta(days=1)
                 continue
@@ -562,6 +568,18 @@ class PlannerScene(QGraphicsScene):
         super().__init__(parent)
         self.owner = owner
 
+    def _visible_day_offsets(self, rect: QRectF) -> tuple[int, int]:
+        range_start = self.owner.range_start
+        range_end = self.owner.range_end
+        if range_start is None or range_end is None:
+            return 0, -1
+        total_offsets = max(0, (range_end - range_start).days)
+        left = float(rect.left()) - CHART_LEFT_MARGIN
+        right = float(rect.right()) - CHART_LEFT_MARGIN
+        first = max(0, int(left // self.owner.pixels_per_day) - 1)
+        last = min(total_offsets, int(right // self.owner.pixels_per_day) + 1)
+        return first, last
+
     def drawBackground(self, painter: QPainter, rect: QRectF):
         painter.fillRect(rect, self.owner.palette().base())
         range_start = self.owner.range_start
@@ -570,33 +588,66 @@ class PlannerScene(QGraphicsScene):
 
         first_row = max(0, int(rect.top() // ROW_HEIGHT))
         last_row = int(rect.bottom() // ROW_HEIGHT) + 1
-        selected_uid = self.owner.selected_uid
         for row_index in range(first_row, min(last_row, len(self.owner.visible_rows))):
             y = row_index * ROW_HEIGHT
             row_rect = QRectF(rect.left(), y, rect.width(), ROW_HEIGHT)
             if row_index % 2 == 0:
                 painter.fillRect(row_rect, self.owner.palette().alternateBase())
-            row = self.owner.visible_rows[row_index]
-            if selected_uid and str(row.get("uid") or "") == selected_uid:
-                painter.fillRect(row_rect, QColor(59, 130, 246, 30))
 
         if self.owner.range_end is None:
             return
-        total_days = max(1, (self.owner.range_end - range_start).days)
-        for offset in range(total_days + 1):
+        first_offset, last_offset = self._visible_day_offsets(rect)
+        if last_offset < first_offset:
+            return
+
+        for offset in range(first_offset, last_offset + 1):
             day = range_start + timedelta(days=offset)
-            x = offset * self.owner.pixels_per_day
+            x = CHART_LEFT_MARGIN + (offset * self.owner.pixels_per_day)
             col_rect = QRectF(x, rect.top(), self.owner.pixels_per_day, rect.height())
             if day.weekday() >= 5:
                 painter.fillRect(col_rect, QColor(17, 24, 39, 18))
             painter.setPen(QPen(self.owner.palette().mid().color(), 1, Qt.PenStyle.DotLine))
             painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
 
+        final_x = CHART_LEFT_MARGIN + ((last_offset + 1) * self.owner.pixels_per_day)
+        if rect.left() <= final_x <= rect.right():
+            painter.setPen(QPen(self.owner.palette().mid().color(), 1, Qt.PenStyle.DotLine))
+            painter.drawLine(QPointF(final_x, rect.top()), QPointF(final_x, rect.bottom()))
+
+    def drawForeground(self, painter: QPainter, rect: QRectF):
+        super().drawForeground(painter, rect)
+        range_start = self.owner.range_start
+        range_end = self.owner.range_end
+        if range_start is None or range_end is None:
+            return
+
         today = today_local()
-        if range_start <= today <= self.owner.range_end:
-            x = ((today - range_start).days * self.owner.pixels_per_day)
-            painter.setPen(QPen(QColor("#DC2626"), 2))
-            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+        if range_start <= today <= range_end:
+            x = CHART_LEFT_MARGIN + ((today - range_start).days * self.owner.pixels_per_day)
+            if rect.left() - 4 <= x <= rect.right() + 4:
+                highlight_rect = QRectF(
+                    x,
+                    rect.top(),
+                    max(2.0, self.owner.pixels_per_day),
+                    rect.height(),
+                )
+                painter.fillRect(highlight_rect, QColor(239, 68, 68, 24))
+                painter.setPen(QPen(QColor("#DC2626"), 2))
+                painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+
+        selected_rect = self.owner.selected_row_scene_rect()
+        if selected_rect.isNull():
+            return
+        selected_rect = selected_rect.intersected(rect)
+        if selected_rect.isEmpty():
+            return
+        accent_rect = QRectF(
+            selected_rect.left(),
+            selected_rect.top() + 2.0,
+            4.0,
+            max(0.0, selected_rect.height() - 4.0),
+        )
+        painter.fillRect(accent_rect, QColor(59, 130, 246, 180))
 
 
 class TimelineBarItem(QGraphicsItem):
@@ -1033,6 +1084,10 @@ class ProjectGanttView(QWidget):
         self.pixels_per_day = GANTT_SCALE_PRESETS["week"][1]
         self._zoom_mode = "preset"
         self._zoom_preset_key = "week"
+        self._dependency_rebuild_pending = False
+        self._dependency_rebuild_timer = QTimer(self)
+        self._dependency_rebuild_timer.setSingleShot(True)
+        self._dependency_rebuild_timer.timeout.connect(self._flush_dependency_rebuild)
 
         root = QVBoxLayout(self)
         configure_box_layout(root, margins=(0, 0, 0, 0), spacing=6)
@@ -1151,6 +1206,9 @@ class ProjectGanttView(QWidget):
         self.scene = PlannerScene(self)
         self.view = PlannerGraphicsView(self, self.scene)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self.view.setViewportUpdateMode(
+            QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate
+        )
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.view.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -1298,6 +1356,8 @@ class ProjectGanttView(QWidget):
             self._select_uid_in_tree(current_uid, ensure_visible=False)
 
     def _rebuild_chart(self):
+        self._dependency_rebuild_pending = False
+        self._dependency_rebuild_timer.stop()
         self.visible_rows = []
         self.bar_items = {}
         self.connector_items = []
@@ -1310,7 +1370,11 @@ class ProjectGanttView(QWidget):
             return
 
         total_days = max(1, (self.range_end - self.range_start).days + 1)
-        width = (total_days * self.pixels_per_day) + 64
+        width = (
+            CHART_LEFT_MARGIN
+            + (total_days * self.pixels_per_day)
+            + CHART_RIGHT_MARGIN
+        )
         height = max(220, len(self.visible_rows) * ROW_HEIGHT)
         self.scene.setSceneRect(0, 0, width, height)
 
@@ -1324,6 +1388,7 @@ class ProjectGanttView(QWidget):
 
         self._rebuild_dependency_paths()
         self._update_summary_label()
+        self._invalidate_scene_layers()
         if self.selected_uid:
             self._ensure_selection_visible()
 
@@ -1370,14 +1435,33 @@ class ProjectGanttView(QWidget):
 
     def date_to_scene_x(self, value: date) -> float:
         if self.range_start is None:
-            return 0.0
-        return float((value - self.range_start).days * self.pixels_per_day) + 24.0
+            return CHART_LEFT_MARGIN
+        return (
+            float((value - self.range_start).days * self.pixels_per_day)
+            + CHART_LEFT_MARGIN
+        )
 
     def scene_x_to_date(self, scene_x: float) -> date:
         if self.range_start is None:
             return today_local()
-        days = int(round((float(scene_x) - 24.0) / self.pixels_per_day))
+        days = int(
+            round((float(scene_x) - CHART_LEFT_MARGIN) / self.pixels_per_day)
+        )
         return self.range_start + timedelta(days=days)
+
+    def selected_row_scene_rect(self) -> QRectF:
+        row = self._selected_row()
+        if row is None:
+            return QRectF()
+        index = self.row_index_for_uid(str(row.get("uid") or ""))
+        if index < 0:
+            return QRectF()
+        return QRectF(
+            self.scene.sceneRect().left(),
+            float(index * ROW_HEIGHT),
+            self.scene.sceneRect().width(),
+            float(ROW_HEIGHT),
+        )
 
     def days_from_scene_delta(self, delta_x: float) -> int:
         return int(round(float(delta_x) / self.pixels_per_day))
@@ -1423,10 +1507,17 @@ class ProjectGanttView(QWidget):
         return QRectF(start_x, top, width, bar_height)
 
     def _rebuild_dependency_paths(self):
+        dirty_rect = QRectF()
         for item in self.connector_items:
+            dirty_rect = dirty_rect.united(item.sceneBoundingRect())
             self.scene.removeItem(item)
         self.connector_items = []
         if not self._dashboard:
+            if not dirty_rect.isNull() and not dirty_rect.isEmpty():
+                self._invalidate_scene_layers(
+                    QGraphicsScene.SceneLayer.ItemLayer,
+                    dirty_rect.adjusted(-6.0, -6.0, 6.0, 6.0),
+                )
             return
         for dep in self._dashboard.get("dependencies") or []:
             predecessor_uid = _timeline_uid(dep.get("predecessor_kind"), int(dep.get("predecessor_id") or 0))
@@ -1454,12 +1545,41 @@ class ProjectGanttView(QWidget):
             )
             self.scene.addItem(connector)
             self.connector_items.append(connector)
+            dirty_rect = dirty_rect.united(connector.sceneBoundingRect())
             arrow = QGraphicsPathItem(self._arrow_path(end))
             arrow.setPen(Qt.PenStyle.NoPen)
             arrow.setBrush(pen.color())
             arrow.setZValue(0)
             self.scene.addItem(arrow)
             self.connector_items.append(arrow)
+            dirty_rect = dirty_rect.united(arrow.sceneBoundingRect())
+        if not dirty_rect.isNull() and not dirty_rect.isEmpty():
+            self._invalidate_scene_layers(
+                QGraphicsScene.SceneLayer.ItemLayer,
+                dirty_rect.adjusted(-6.0, -6.0, 6.0, 6.0),
+            )
+
+    def _schedule_dependency_rebuild(self):
+        self._dependency_rebuild_pending = True
+        if not self._dependency_rebuild_timer.isActive():
+            self._dependency_rebuild_timer.start(0)
+
+    def _flush_dependency_rebuild(self):
+        if not self._dependency_rebuild_pending:
+            return
+        self._dependency_rebuild_pending = False
+        self._rebuild_dependency_paths()
+
+    def _invalidate_scene_layers(
+        self,
+        layers: QGraphicsScene.SceneLayer = QGraphicsScene.SceneLayer.AllLayers,
+        rect: QRectF | None = None,
+    ):
+        target = QRectF(rect) if rect is not None else QRectF(self.scene.sceneRect())
+        if target.isNull() or target.isEmpty():
+            target = QRectF(self.scene.sceneRect())
+        self.scene.invalidate(target, layers)
+        self.view.viewport().update()
 
     @staticmethod
     def _arrow_path(point: QPointF) -> QPainterPath:
@@ -1688,7 +1808,7 @@ class ProjectGanttView(QWidget):
         if item is None:
             return
         item.set_dates(start, end)
-        self._rebuild_dependency_paths()
+        self._schedule_dependency_rebuild()
 
     def commit_row_dates(self, uid: str, start: date | None, end: date | None):
         row = self.row_lookup.get(str(uid))
@@ -1709,6 +1829,8 @@ class ProjectGanttView(QWidget):
         self.scheduleEditRequested.emit(str(row.get("kind") or ""), int(row.get("item_id") or 0), start_iso, end_iso)
 
     def finalize_interaction(self, uid: str, start: date | None, end: date | None):
+        self._dependency_rebuild_pending = False
+        self._dependency_rebuild_timer.stop()
         self.commit_row_dates(uid, start, end)
         self.emit_chart_selection(uid)
 
@@ -1724,9 +1846,10 @@ class ProjectGanttView(QWidget):
             return
         if target_uid not in self.row_lookup:
             return
+        previous_uid = self.selected_uid
         self.selected_uid = target_uid
         self._select_uid_in_tree(target_uid, ensure_visible=ensure_visible)
-        self.scene.update()
+        self._update_selection_visuals(previous_uid, target_uid)
         self._update_summary_label()
         if ensure_visible:
             self._ensure_selection_visible()
@@ -1762,6 +1885,41 @@ class ProjectGanttView(QWidget):
         if ensure_visible:
             self.tree.scrollToItem(item, self.tree.ScrollHint.PositionAtCenter)
 
+    def _update_selection_visuals(
+        self,
+        previous_uid: str | None,
+        current_uid: str | None,
+    ):
+        for uid in {str(previous_uid or ""), str(current_uid or "")}:
+            if not uid:
+                continue
+            item = self.bar_items.get(uid)
+            if item is not None:
+                item.update()
+                self.scene.update(
+                    item.sceneBoundingRect().adjusted(-4.0, -4.0, 4.0, 4.0)
+                )
+            row_index = self.row_index_for_uid(uid)
+            if row_index >= 0:
+                row_rect = QRectF(
+                    self.scene.sceneRect().left(),
+                    float(row_index * ROW_HEIGHT),
+                    self.scene.sceneRect().width(),
+                    float(ROW_HEIGHT),
+                )
+                self._invalidate_scene_layers(
+                    QGraphicsScene.SceneLayer.ForegroundLayer,
+                    row_rect,
+                )
+                self.scene.update(
+                    QRectF(
+                        row_rect.left(),
+                        row_rect.top(),
+                        row_rect.width(),
+                        row_rect.height(),
+                    )
+                )
+
     def _ensure_selection_visible(self):
         if not self.selected_uid:
             return
@@ -1772,7 +1930,9 @@ class ProjectGanttView(QWidget):
         self.view.ensureVisible(rect.adjusted(-60, -ROW_HEIGHT, 60, ROW_HEIGHT))
 
     def _on_tree_selection_changed(self, current: QTreeWidgetItem | None, previous: QTreeWidgetItem | None):
-        del previous
+        previous_uid = ""
+        if previous is not None:
+            previous_uid = str(previous.data(0, Qt.ItemDataRole.UserRole) or "")
         if current is None:
             return
         uid = str(current.data(0, Qt.ItemDataRole.UserRole) or "")
@@ -1780,7 +1940,7 @@ class ProjectGanttView(QWidget):
         if row is None:
             return
         self.selected_uid = uid
-        self.scene.update()
+        self._update_selection_visuals(previous_uid, uid)
         self._update_summary_label()
         if self._suspend_tree_selection_emit:
             return

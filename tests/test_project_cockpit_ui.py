@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import date
+from unittest.mock import patch
 
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QFontMetrics, QNativeGestureEvent, QPointingDevice, QWheelEvent
 
 from gantt_ui import (
+    CHART_LEFT_MARGIN,
     MAX_PIXELS_PER_DAY,
     MIN_PIXELS_PER_DAY,
     ProjectGanttView,
@@ -218,6 +220,19 @@ def test_timeline_header_uses_month_year_and_day_number_labels(qapp):
     assert header._minor_label_for(date(2026, 2, 28)) == "28"
 
 
+def test_timeline_header_and_chart_share_the_same_left_margin(qapp):
+    header = TimelineHeaderWidget()
+    header.set_range(date(2026, 2, 1), date(2026, 2, 28), 12.0)
+
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+
+    assert header._scene_x_for(date(2026, 2, 1)) == int(CHART_LEFT_MARGIN)
+    assert widget.range_start is not None
+    assert widget.date_to_scene_x(widget.range_start) == CHART_LEFT_MARGIN
+
+
 def test_timeline_text_layout_uses_full_text_or_dot_placeholder(qapp):
     font = qapp.font()
     fitted_font, _metrics, full_text = _text_layout(
@@ -391,6 +406,65 @@ def test_gantt_view_release_path_survives_immediate_dashboard_rebuild(qapp):
 
     assert event.accepted is True
     assert "task:2" in widget.bar_items
+
+
+def test_gantt_view_preview_dates_coalesces_dependency_rebuilds(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+    widget.show()
+    qapp.processEvents()
+
+    with patch.object(widget, "_rebuild_dependency_paths") as rebuild_mock:
+        widget.preview_row_dates("task:2", date(2026, 3, 9), date(2026, 3, 11))
+        widget.preview_row_dates("task:2", date(2026, 3, 10), date(2026, 3, 12))
+        widget.preview_row_dates("task:2", date(2026, 3, 11), date(2026, 3, 13))
+        assert rebuild_mock.call_count == 0
+        qapp.processEvents()
+        assert rebuild_mock.call_count == 1
+
+
+def test_gantt_view_selection_updates_do_not_request_full_scene_redraw(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+    widget.show()
+    qapp.processEvents()
+
+    with patch.object(widget.scene, "update", wraps=widget.scene.update) as update_mock:
+        widget.select_item("task", 2)
+        widget.select_item("task", 4)
+
+    assert update_mock.call_count > 0
+    assert all(call.args for call in update_mock.call_args_list)
+
+
+def test_gantt_view_uses_bounding_rect_viewport_updates_for_line_stability(qapp):
+    widget = ProjectGanttView()
+
+    assert (
+        widget.view.viewportUpdateMode()
+        == widget.view.ViewportUpdateMode.BoundingRectViewportUpdate
+    )
+
+
+def test_gantt_view_zoom_rebuild_invalidates_all_scene_layers(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+    widget.show()
+    qapp.processEvents()
+
+    with patch.object(widget.scene, "invalidate", wraps=widget.scene.invalidate) as invalidate_mock:
+        widget._set_zoom_pixels_per_day(18.0, mode="custom")
+        qapp.processEvents()
+
+    assert invalidate_mock.call_count > 0
+    assert any(
+        len(call.args) >= 2
+        and call.args[1] == widget.scene.SceneLayer.AllLayers
+        for call in invalidate_mock.call_args_list
+    )
 
 
 def test_gantt_view_commit_move_emits_schedule_edit(qapp):
