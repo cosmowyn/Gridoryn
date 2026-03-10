@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, QSettings
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QStyleOptionViewItem, QTreeView
 
 import main as main_module
@@ -44,6 +45,24 @@ def test_main_window_skips_tray_when_no_icon_is_available(tmp_path, qapp, monkey
     try:
         assert FakeTrayIcon.created is False
         assert window._tray_icon is None
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_main_window_resolved_tray_icon_uses_qstyle_fallback(tmp_path, qapp, monkeypatch):
+    QSettings().setValue("ui/onboarding_completed", True)
+    monkeypatch.setattr(main_module.QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: False))
+    monkeypatch.setattr(MainWindow, "_install_optional_global_capture_hotkey", lambda self: None)
+
+    manager, workspace_id = _workspace_manager(tmp_path)
+    window = MainWindow(manager, workspace_id)
+    try:
+        window.setWindowIcon(QIcon())
+        window.model.current_window_icon = lambda: QIcon()
+        icon = window._resolved_tray_icon()
+        assert icon is not None
+        assert icon.isNull() is False
     finally:
         window.close()
         qapp.processEvents()

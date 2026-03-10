@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QTreeView, QPushButton, QToolBar, QMenu, QMessageBox, QAbstractItemView,
     QLineEdit, QDockWidget, QLabel, QToolButton, QComboBox, QInputDialog,
     QFileDialog, QListWidget, QListWidgetItem, QUndoView, QScrollArea,
-    QSystemTrayIcon,
+    QStyle, QSystemTrayIcon,
     QGridLayout, QGroupBox, QSizePolicy, QLayout, QHeaderView
 )
 
