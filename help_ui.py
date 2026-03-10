@@ -474,7 +474,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
             "child progress",
             "parent",
         ],
-        body_html="""
+        body_html=f"""
         <p>The <strong>Project cockpit</strong> dock turns a selected top-level task into a structured personal project workspace without leaving the local task database.</p>
         <ul>
             <li>The cockpit is laid out as a compact desktop workspace: <strong>project selection</strong> at the top, a persistent <strong>project summary header</strong> below it, then tab-local work surfaces underneath.</li>
@@ -494,7 +494,7 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><strong>Double-click empty timeline space to add a new task at that date</strong>. The new bar is selected immediately so you can drag or resize it without leaving the chart.</li>
             <li><strong>Milestones use a dedicated diamond marker</strong>, while summary rows roll up child spans and use a distinct parent-bar style so hierarchy stays legible without relying on large inline bar labels.</li>
             <li><strong>The timeline includes Today, Selected, Fit project, and Fit selection controls</strong>, along with Day, Week, and Month zoom levels.</li>
-            <li><strong>{_sc("Ctrl")}+mouse-wheel zooms the chart</strong> and supported trackpad pinch gestures use the same zoom state. The left/right arrow keys nudge the selected item by day. Use <code>Alt+Left/Right</code> to resize task starts and <code>Shift+Left/Right</code> to resize task ends.</li>
+            <li><strong>{_sc("Ctrl")} + mouse wheel zooms the chart</strong> and supported trackpad pinch gestures use the same zoom state. The left/right arrow keys nudge the selected item by day. Use <code>Alt+Left/Right</code> to resize task starts and <code>Shift+Left/Right</code> to resize task ends.</li>
             <li><strong>Right-click the chart for contextual planning actions</strong> such as adding tasks, child tasks, milestones, deliverables, dependency editing, row movement, per-item color overrides, archive, permanent delete, and view navigation.</li>
             <li><strong>Timeline selection stays synchronized</strong> with the project cockpit tables, task tree, details panel, and relationship inspector.</li>
             <li><strong>Task and project rows can be archived or permanently deleted from the cockpit</strong>, so items created from the planner can also be cleaned up there without returning to the main task tree.</li>

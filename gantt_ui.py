@@ -681,19 +681,6 @@ class PlannerScene(QGraphicsScene):
                 painter.drawEllipse(QPointF(line_left, preview_y), 3.5, 3.5)
                 painter.drawEllipse(QPointF(line_right, preview_y), 3.5, 3.5)
 
-        selected_rect = self.owner.selected_row_scene_rect()
-        if selected_rect.isNull():
-            return
-        selected_rect = selected_rect.intersected(rect)
-        if selected_rect.isEmpty():
-            return
-        accent_rect = QRectF(
-            selected_rect.left(),
-            selected_rect.top() + 2.0,
-            4.0,
-            max(0.0, selected_rect.height() - 4.0),
-        )
-        painter.fillRect(accent_rect, QColor(59, 130, 246, 180))
 
 
 class TimelineBarItem(QGraphicsItem):
