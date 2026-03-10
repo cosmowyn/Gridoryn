@@ -1073,14 +1073,31 @@ class Database:
         )
         child_count = int(cur.fetchone()["child_count"] or 0)
         cur.execute(
-            "SELECT COUNT(*) AS task_count FROM tasks WHERE category_folder_id=? AND parent_id IS NULL;",
+            """
+            SELECT COUNT(*) AS task_count
+            FROM tasks
+            WHERE category_folder_id=?
+              AND parent_id IS NULL
+              AND archived_at IS NULL;
+            """,
             (target_id,),
         )
         task_count = int(cur.fetchone()["task_count"] or 0)
-        if child_count > 0 or task_count > 0:
-            raise ValueError("Category must be empty before it can be removed.")
+        if child_count > 0:
+            raise ValueError("Category must have no subcategories before it can be removed.")
+        if task_count > 0:
+            raise ValueError("Category must have no active top-level tasks before it can be removed.")
         with self.tx():
             cur = self.conn.cursor()
+            cur.execute(
+                """
+                UPDATE tasks
+                SET category_folder_id=NULL,
+                    last_update=?
+                WHERE category_folder_id=?;
+                """,
+                (now_iso(), target_id),
+            )
             cur.execute("DELETE FROM category_folders WHERE id=?;", (target_id,))
 
     def set_task_category_folder(self, task_id: int, folder_id: int | None):

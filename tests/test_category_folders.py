@@ -140,3 +140,26 @@ def test_move_task_with_category_folders_present_does_not_crash(
     finally:
         window.close()
         qapp.processEvents()
+
+
+def test_delete_category_folder_allows_only_archived_tasks(tmp_path):
+    db = Database(str(tmp_path / "archived-category.sqlite3"))
+    try:
+        folder_id = db.create_category_folder("Archive Bucket")
+        task_id = db.insert_task(
+            {
+                "description": "Archived task",
+                "category_folder_id": folder_id,
+                "sort_order": db.next_sort_order(None),
+            }
+        )
+        db.archive_task(task_id)
+
+        db.delete_category_folder(folder_id)
+
+        assert db.fetch_category_folder(folder_id) is None
+        archived_task = db.fetch_task_by_id(task_id)
+        assert archived_task is not None
+        assert archived_task["category_folder_id"] is None
+    finally:
+        db.close()
