@@ -466,6 +466,8 @@ def test_project_root_template_roundtrip_preserves_project_state(tmp_path, qapp)
     db.set_task_phase(task_one, int(planning_phase["id"]))
     db.set_task_phase(task_two, int(execution_phase["id"]))
     db.set_task_dependencies(task_two, [task_one])
+    db.set_task_gantt_color(project_id, "#223344")
+    db.set_task_gantt_color(task_one, "#446688")
 
     milestone_id = db.upsert_milestone(
         {
@@ -479,6 +481,7 @@ def test_project_root_template_roundtrip_preserves_project_state(tmp_path, qapp)
             "baseline_target_date": (today + timedelta(days=1)).isoformat(),
             "status": "in_progress",
             "progress_percent": 50,
+            "gantt_color_hex": "#AA5500",
             "dependencies": [{"kind": "task", "id": task_one}],
         }
     )
@@ -495,6 +498,7 @@ def test_project_root_template_roundtrip_preserves_project_state(tmp_path, qapp)
             "acceptance_criteria": "Bundle verified",
             "version_ref": "v2.0.0",
             "status": "planned",
+            "gantt_color_hex": "#116655",
         }
     )
     db.upsert_project_register_entry(
@@ -534,6 +538,7 @@ def test_project_root_template_roundtrip_preserves_project_state(tmp_path, qapp)
     assert new_dashboard["profile"]["objective"] == "Launch Gridoryn Release"
     assert new_dashboard["profile"]["owner"] == "Alice"
     assert new_dashboard["baseline"]["effort_minutes"] == 360
+    assert str(new_dashboard["project"].get("gantt_color_hex") or "").lower() == "#223344"
 
     new_tasks = {
         str(row["description"]): row
@@ -542,18 +547,21 @@ def test_project_root_template_roundtrip_preserves_project_state(tmp_path, qapp)
     assert {"Draft specification", "Publish release"} <= set(new_tasks)
     assert new_tasks["Draft specification"]["phase_id"] is not None
     assert new_tasks["Publish release"]["phase_id"] is not None
+    assert str(new_tasks["Draft specification"].get("gantt_color_hex") or "").lower() == "#446688"
     publish_deps = db.fetch_dependencies(int(new_tasks["Publish release"]["id"]))
     assert [int(row["id"]) for row in publish_deps] == [int(new_tasks["Draft specification"]["id"])]
 
     new_milestones = db.fetch_project_milestones(int(new_root_id))
     assert len(new_milestones) == 1
     new_milestone = new_milestones[0]
+    assert str(new_milestone.get("gantt_color_hex") or "").lower() == "#aa5500"
     assert int(new_milestone["linked_task_id"]) == int(new_tasks["Draft specification"]["id"])
     assert len(new_milestone["dependencies"]) == 1
     assert int(new_milestone["dependencies"][0]["id"]) == int(new_tasks["Draft specification"]["id"])
 
     new_deliverables = db.fetch_project_deliverables(int(new_root_id))
     assert len(new_deliverables) == 1
+    assert str(new_deliverables[0].get("gantt_color_hex") or "").lower() == "#116655"
     assert int(new_deliverables[0]["linked_task_id"]) == int(new_tasks["Publish release"]["id"])
     assert int(new_deliverables[0]["linked_milestone_id"]) == int(new_milestone["id"])
 
@@ -584,6 +592,7 @@ def test_subtree_template_inside_project_stays_plain_task_template(tmp_path, qap
     planning_phase = next(row for row in db.fetch_project_phases(project_id) if row["name"] == "Planning")
     db.set_task_phase(task_one, int(planning_phase["id"]))
     db.set_task_dependencies(task_two, [task_one])
+    db.set_task_gantt_color(task_one, "#778899")
 
     model = TaskTreeModel(db)
     model.save_template_from_task("Child Template", task_one)
@@ -597,6 +606,7 @@ def test_subtree_template_inside_project_stays_plain_task_template(tmp_path, qap
     new_task = db.fetch_task_by_id(int(new_root_id))
     assert new_task is not None
     assert new_task["phase_id"] is None
+    assert str(new_task.get("gantt_color_hex") or "").lower() == "#778899"
     assert db.fetch_project_profile(int(new_root_id)) is None
 
 

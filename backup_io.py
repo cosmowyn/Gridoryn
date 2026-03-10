@@ -169,7 +169,7 @@ def export_payload(db: Database) -> dict:
                waiting_for,
                recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
                reminder_at, reminder_minutes_before, reminder_fired_at,
-               start_date, phase_id, category_folder_id
+               start_date, phase_id, category_folder_id, gantt_color_hex
         FROM tasks
         ORDER BY COALESCE(parent_id, 0), sort_order ASC, id ASC;
         """
@@ -305,7 +305,7 @@ def export_payload(db: Database) -> dict:
     cur.execute(
         """
         SELECT id, project_task_id, title, description, phase_id, linked_task_id, start_date, target_date,
-               baseline_target_date, status, progress_percent, completed_at, created_at, updated_at
+               baseline_target_date, status, progress_percent, completed_at, gantt_color_hex, created_at, updated_at
         FROM milestones
         ORDER BY project_task_id, COALESCE(target_date, '9999-12-31'), id;
         """
@@ -316,6 +316,7 @@ def export_payload(db: Database) -> dict:
         """
         SELECT id, project_task_id, title, description, phase_id, linked_task_id, linked_milestone_id,
                due_date, baseline_due_date, acceptance_criteria, version_ref, status, completed_at,
+               gantt_color_hex,
                created_at, updated_at
         FROM deliverables
         ORDER BY project_task_id, COALESCE(due_date, '9999-12-31'), id;
@@ -691,6 +692,7 @@ def _task_insert_values(
         t.get("start_date"),
         t.get("phase_id"),
         category_folder_id,
+        str(t.get("gantt_color_hex") or "").strip() or None,
     )
 
 
@@ -819,8 +821,8 @@ def _import_tasks_keep_ids(
                                       waiting_for,
                                       recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
                                       reminder_at, reminder_minutes_before, reminder_fired_at,
-                                      start_date, phase_id, category_folder_id)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      start_date, phase_id, category_folder_id, gantt_color_hex)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         tid,
@@ -852,8 +854,8 @@ def _import_tasks_keep_ids(
                                       waiting_for,
                                       recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
                                       reminder_at, reminder_minutes_before, reminder_fired_at,
-                                      start_date, phase_id, category_folder_id)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      start_date, phase_id, category_folder_id, gantt_color_hex)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         tid,
@@ -928,8 +930,8 @@ def _import_tasks_merge(
                                   waiting_for,
                                   recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
                                   reminder_at, reminder_minutes_before, reminder_fired_at,
-                                  start_date, phase_id, category_folder_id)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                  start_date, phase_id, category_folder_id, gantt_color_hex)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 _task_insert_values(t, new_parent, sort_order, folder_id_map),
             )
@@ -953,8 +955,8 @@ def _import_tasks_merge(
                                       waiting_for,
                                       recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
                                       reminder_at, reminder_minutes_before, reminder_fired_at,
-                                      start_date, phase_id, category_folder_id)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      start_date, phase_id, category_folder_id, gantt_color_hex)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     _task_insert_values(
                         t,
@@ -1307,10 +1309,11 @@ def _import_milestones(cur, milestones: list[dict], task_id_map: dict[int, int],
                 status,
                 progress_percent,
                 completed_at,
+                gantt_color_hex,
                 created_at,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (
                 int(new_project_id),
@@ -1324,6 +1327,7 @@ def _import_milestones(cur, milestones: list[dict], task_id_map: dict[int, int],
                 str(row.get("status") or "planned"),
                 int(row.get("progress_percent") or 0),
                 row.get("completed_at"),
+                str(row.get("gantt_color_hex") or "").strip() or None,
                 str(row.get("created_at") or now_iso()),
                 str(row.get("updated_at") or now_iso()),
             ),
@@ -1382,10 +1386,11 @@ def _import_deliverables(
                 version_ref,
                 status,
                 completed_at,
+                gantt_color_hex,
                 created_at,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (
                 int(new_project_id),
@@ -1400,6 +1405,7 @@ def _import_deliverables(
                 str(row.get("version_ref") or ""),
                 str(row.get("status") or "planned"),
                 row.get("completed_at"),
+                str(row.get("gantt_color_hex") or "").strip() or None,
                 str(row.get("created_at") or now_iso()),
                 str(row.get("updated_at") or now_iso()),
             ),

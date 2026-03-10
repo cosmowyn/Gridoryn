@@ -1274,6 +1274,12 @@ class MainWindow(QMainWindow):
         self.project_panel.timelineScheduleRequested.connect(
             self._project_panel_schedule_timeline_item
         )
+        self.project_panel.timelineItemColorRequested.connect(
+            self._project_panel_set_timeline_item_color
+        )
+        self.project_panel.timelineItemColorResetRequested.connect(
+            self._project_panel_reset_timeline_item_color
+        )
         self.project_panel.timelineTaskMoveRequested.connect(
             self._move_task_to_row_from_timeline
         )
@@ -5176,6 +5182,35 @@ class MainWindow(QMainWindow):
         self._refresh_focus_panel()
         self._refresh_relationships_panel()
         self._restore_task_focus_if_needed(preserved_task_id)
+
+    def _project_panel_set_timeline_item_color(
+        self,
+        kind: str,
+        item_id: int,
+        color_hex,
+    ):
+        item_kind = str(kind or "").strip().lower()
+        value = str(color_hex or "").strip() or None
+        try:
+            self.model.set_timeline_item_color(item_kind, int(item_id), value)
+            log_event(
+                "Timeline item color updated",
+                context="project.timeline.color",
+                db_path=self.db.path,
+                details={
+                    "kind": item_kind,
+                    "item_id": int(item_id),
+                    "color": value,
+                },
+            )
+        except Exception as e:
+            log_exception(e, context="project-timeline-color", db_path=self.db.path)
+            QMessageBox.warning(self, "Timeline color failed", str(e))
+            return
+        self._refresh_project_panel()
+
+    def _project_panel_reset_timeline_item_color(self, kind: str, item_id: int):
+        self._project_panel_set_timeline_item_color(kind, item_id, None)
 
     def _move_selected_task_from_timeline(self, task_id: int, delta: int):
         tid = int(task_id or 0)

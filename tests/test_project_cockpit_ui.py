@@ -185,10 +185,10 @@ def test_gantt_view_distinguishes_summary_bars_from_normal_tasks(qapp):
     assert str(task_row.get("render_style")) == "task"
     assert widget.bar_color_for_row(summary_row) != widget.bar_color_for_row(task_row)
     assert summary_item.base_rect().height() > task_item.base_rect().height()
-    assert summary_item._use_external_text_label() is False
+    assert summary_item.boundingRect().width() <= summary_item.base_rect().width() + 20.0
 
 
-def test_gantt_summary_bar_uses_external_label_when_text_no_longer_fits(qapp):
+def test_gantt_large_bars_do_not_expand_for_text_labels(qapp):
     widget = ProjectGanttView()
     widget.resize(820, 420)
     widget.set_dashboard(_sample_dashboard())
@@ -197,8 +197,38 @@ def test_gantt_summary_bar_uses_external_label_when_text_no_longer_fits(qapp):
     qapp.processEvents()
 
     summary_item = widget.bar_items["task:2"]
-    assert summary_item._use_external_text_label() is True
-    assert summary_item.boundingRect().width() > summary_item.base_rect().width()
+    task_item = widget.bar_items["task:4"]
+    deliverable_item = widget.bar_items["deliverable:6"]
+
+    assert summary_item.boundingRect().width() <= summary_item.base_rect().width() + 20.0
+    assert task_item.boundingRect().width() <= task_item.base_rect().width() + 20.0
+    assert (
+        deliverable_item.boundingRect().width()
+        <= deliverable_item.base_rect().width() + 20.0
+    )
+
+
+def test_gantt_view_uses_local_item_color_override_before_defaults(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    dashboard = _sample_dashboard()
+    dashboard["timeline_rows"] = [dict(row) for row in dashboard["timeline_rows"]]
+    widget.set_dashboard(dashboard)
+    widget.show()
+    qapp.processEvents()
+
+    task_row = widget.row_lookup["task:3"]
+    summary_row = widget.row_lookup["project:1"]
+    default_task_color = widget.bar_color_for_row(task_row).name().lower()
+    default_summary_color = widget.bar_color_for_row(summary_row).name().lower()
+
+    task_row["gantt_color_hex"] = "#334455"
+    summary_row["gantt_color_hex"] = "#eeddee"
+
+    assert widget.bar_color_for_row(task_row).name().lower() == "#334455"
+    assert widget.bar_color_for_row(summary_row).name().lower() == "#eeddee"
+    assert default_task_color != "#334455"
+    assert default_summary_color != "#eeddee"
 
 
 def test_gantt_view_uses_persisted_theme_colors_for_task_and_summary_bars(qapp):
@@ -245,8 +275,6 @@ def test_gantt_view_milestone_bounds_include_label_and_toolbar_controls_fit_text
 
     milestone_item = widget.bar_items["milestone:5"]
     assert milestone_item.boundingRect().width() > milestone_item.base_rect().width()
-    task_item = widget.bar_items["task:2"]
-    assert task_item.boundingRect().width() > task_item.base_rect().width()
 
     for button in (
         widget.today_btn,
@@ -261,6 +289,38 @@ def test_gantt_view_milestone_bounds_include_label_and_toolbar_controls_fit_text
         assert button.minimumWidth() >= expected
 
     assert widget.summary_label.minimumWidth() >= 260
+
+
+def test_gantt_context_menu_emits_item_color_actions(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+    widget.show()
+    qapp.processEvents()
+
+    widget.row_lookup["task:2"]["gantt_color_hex"] = "#445566"
+    task_item = widget.bar_items["task:2"]
+    task_pos = widget.view.mapFromScene(task_item.base_rect().center())
+    menu = widget.build_context_menu(task_pos)
+    labels = [action.text() for action in menu.actions()]
+    assert "Set item color…" in labels
+    assert "Reset item color to default" in labels
+
+    changed: list[tuple[str, int, object]] = []
+    reset: list[tuple[str, int]] = []
+    widget.itemColorChangeRequested.connect(
+        lambda kind, item_id, color: changed.append((str(kind), int(item_id), color))
+    )
+    widget.itemColorResetRequested.connect(
+        lambda kind, item_id: reset.append((str(kind), int(item_id)))
+    )
+
+    with patch("gantt_ui.QColorDialog.getColor", return_value=widget.bar_color_for_row(widget.row_lookup["task:2"]).lighter(130)):
+        next(action for action in menu.actions() if action.text() == "Set item color…").trigger()
+    next(action for action in menu.actions() if action.text() == "Reset item color to default").trigger()
+
+    assert changed and changed[0][0:2] == ("task", 2)
+    assert reset == [("task", 2)]
 
 
 def test_timeline_header_uses_separate_bands_and_keeps_today_badge_out_of_minor_row(qapp):

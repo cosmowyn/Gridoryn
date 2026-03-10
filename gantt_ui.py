@@ -32,6 +32,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QColorDialog,
     QGraphicsItem,
     QGraphicsPathItem,
     QGraphicsScene,
@@ -753,27 +754,6 @@ class TimelineBarItem(QGraphicsItem):
         text = str(self.row.get("label") or "")
         return min(260.0, max(72.0, metrics.horizontalAdvance(text) + (BAR_TEXT_PADDING_X * 2.0)))
 
-    def _use_external_text_label(self) -> bool:
-        style = str(self.row.get("render_style") or "")
-        if style not in {"task", "deliverable", "summary"}:
-            return False
-        rect = self.base_rect()
-        text = str(self.row.get("label") or "")
-        padding_x = 10.0 if style == "summary" else BAR_TEXT_PADDING_X
-        internal_width = rect.width() - (padding_x * 2.0)
-        metrics = self._label_font_metrics()
-        if metrics.horizontalAdvance(text) > max(0.0, internal_width):
-            return True
-        threshold = 54.0 if style == "summary" else 36.0
-        return internal_width < threshold
-
-    def _external_label_rect(self) -> QRectF:
-        rect = self.base_rect()
-        height = self._label_box_height()
-        width = self._preferred_label_width()
-        top = rect.center().y() - (height / 2.0)
-        return QRectF(rect.right() + 6.0, top, width, height)
-
     def _milestone_label_rect(self) -> QRectF:
         rect = self.base_rect()
         if not str(self.row.get("label") or ""):
@@ -834,8 +814,6 @@ class TimelineBarItem(QGraphicsItem):
         style = str(self.row.get("render_style") or "")
         if style == "milestone":
             bounds = bounds.united(self._milestone_label_rect().adjusted(-2, -2, 2, 2))
-        elif self._use_external_text_label():
-            bounds = bounds.united(self._external_label_rect().adjusted(-2, -2, 2, 2))
         return bounds
 
     def anchor_start(self) -> QPointF:
@@ -941,7 +919,6 @@ class TimelineBarItem(QGraphicsItem):
         text_color = self.owner.bar_text_color_for_row(row)
         style = str(row.get("render_style") or "task")
         is_selected = self.owner.selected_uid == self.uid
-        base_font = self._label_font()
 
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(QPen(border, 1.6 if style == "summary" and not is_selected else 1.4 if not is_selected else 2.2))
@@ -971,39 +948,6 @@ class TimelineBarItem(QGraphicsItem):
                 )
         elif style == "deliverable":
             painter.drawRoundedRect(rect, 6, 6)
-            if self._use_external_text_label():
-                label_rect = self._external_label_rect()
-                self._draw_external_label_chip(
-                    painter,
-                    label_rect,
-                    fill=color,
-                    text_color=text_color,
-                    border=border,
-                    neutral=True,
-                )
-            else:
-                painter.setPen(text_color)
-                painter.save()
-                label_font, _label_metrics, label_text = _text_layout(
-                    base_font,
-                    str(row.get("label") or ""),
-                    rect.width(),
-                    rect.height(),
-                    padding_x=BAR_TEXT_PADDING_X,
-                    padding_y=BAR_TEXT_PADDING_Y,
-                )
-                painter.setFont(label_font)
-                painter.drawText(
-                    rect.adjusted(
-                        BAR_TEXT_PADDING_X,
-                        0,
-                        -BAR_TEXT_PADDING_X,
-                        0,
-                    ),
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                    label_text,
-                )
-                painter.restore()
         elif style == "summary":
             path = QPainterPath()
             path.moveTo(rect.left(), rect.center().y())
@@ -1020,32 +964,6 @@ class TimelineBarItem(QGraphicsItem):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(accent)
                 painter.drawRoundedRect(accent_rect, 2.5, 2.5)
-            if self._use_external_text_label():
-                self._draw_external_label_chip(
-                    painter,
-                    self._external_label_rect(),
-                    fill=color.lighter(108),
-                    text_color=text_color,
-                    border=border,
-                )
-            else:
-                painter.setPen(text_color)
-                painter.save()
-                label_font, _label_metrics, label_text = _text_layout(
-                    base_font,
-                    str(row.get("label") or ""),
-                    rect.width(),
-                    rect.height(),
-                    padding_x=10.0,
-                    padding_y=BAR_TEXT_PADDING_Y,
-                )
-                painter.setFont(label_font)
-                painter.drawText(
-                    rect.adjusted(10, 0, -10, 0),
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                    label_text,
-                )
-                painter.restore()
         else:
             painter.drawRoundedRect(rect, 5, 5)
             progress = max(0, min(100, int(row.get("progress_percent") or 0)))
@@ -1057,39 +975,6 @@ class TimelineBarItem(QGraphicsItem):
                 painter.drawRoundedRect(fill_rect, 5, 5)
                 painter.setPen(QPen(border, 1.4 if not is_selected else 2.2))
                 painter.setBrush(color)
-            if self._use_external_text_label():
-                label_rect = self._external_label_rect()
-                self._draw_external_label_chip(
-                    painter,
-                    label_rect,
-                    fill=color,
-                    text_color=text_color,
-                    border=border,
-                    neutral=True,
-                )
-            else:
-                painter.setPen(text_color)
-                painter.save()
-                label_font, _label_metrics, label_text = _text_layout(
-                    base_font,
-                    str(row.get("label") or ""),
-                    rect.width(),
-                    rect.height(),
-                    padding_x=BAR_TEXT_PADDING_X,
-                    padding_y=BAR_TEXT_PADDING_Y,
-                )
-                painter.setFont(label_font)
-                painter.drawText(
-                    rect.adjusted(
-                        BAR_TEXT_PADDING_X,
-                        0,
-                        -BAR_TEXT_PADDING_X,
-                        0,
-                    ),
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                    label_text,
-                )
-                painter.restore()
 
         baseline = _ensure_date(str(row.get("baseline_date") or None))
         if baseline is not None and self.owner.range_start is not None:
@@ -1127,6 +1012,8 @@ class ProjectGanttView(QWidget):
     taskMoveRequested = Signal(int, object, int)
     archiveTaskRequested = Signal(int)
     deleteTaskRequested = Signal(int)
+    itemColorChangeRequested = Signal(str, int, object)
+    itemColorResetRequested = Signal(str, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1321,9 +1208,24 @@ class ProjectGanttView(QWidget):
         }:
             self.reload_theme_colors()
 
+    def _scene_stack_available(self) -> bool:
+        try:
+            scene = self.scene
+            view = self.view
+        except RuntimeError:
+            return False
+        if scene is None or view is None:
+            return False
+        try:
+            scene.sceneRect()
+            view.viewport()
+        except RuntimeError:
+            return False
+        return True
+
     def reload_theme_colors(self):
         self._theme_colors = _active_theme_colors()
-        if not hasattr(self, "view"):
+        if not hasattr(self, "view") or not self._scene_stack_available():
             return
         self._invalidate_scene_layers()
         self.header.update()
@@ -1343,6 +1245,17 @@ class ProjectGanttView(QWidget):
     def _bar_style_for_row(self, row: dict) -> dict[str, QColor]:
         colors = self._theme_colors or {}
         style = str(row.get("render_style") or "task")
+        override = QColor(str(row.get("gantt_color_hex") or "").strip())
+        if override.isValid():
+            fill = override
+            text = _best_contrast(fill)
+            return {
+                "fill": fill,
+                "text": text,
+                "border": fill.lighter(130)
+                if fill.lightness() < 110
+                else fill.darker(135),
+            }
         status = str(row.get("status") or "").strip().lower()
         blocked = bool(row.get("blocked"))
         display_end = _ensure_date(
@@ -1393,6 +1306,17 @@ class ProjectGanttView(QWidget):
 
     def bar_border_for_row(self, row: dict) -> QColor:
         return self._bar_style_for_row(row)["border"]
+
+    @staticmethod
+    def _row_supports_local_color(row: dict | None) -> bool:
+        if not isinstance(row, dict):
+            return False
+        return str(row.get("kind") or "").strip().lower() in {
+            "project",
+            "task",
+            "milestone",
+            "deliverable",
+        }
 
     def row_is_editable(self, row: dict) -> bool:
         return bool(row.get("editable_move") or row.get("editable_start") or row.get("editable_end"))
@@ -1703,6 +1627,8 @@ class ProjectGanttView(QWidget):
         self._rebuild_dependency_paths()
 
     def _visible_scene_rect(self) -> QRectF:
+        if not self._scene_stack_available():
+            return QRectF()
         if self.scene.sceneRect().isNull() or self.scene.sceneRect().isEmpty():
             return QRectF()
         rect = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
@@ -1737,17 +1663,22 @@ class ProjectGanttView(QWidget):
         rect: QRectF | None = None,
     ):
         with measure_ui("gantt._invalidate_scene_layers", visible=self.isVisible()):
+            if not self._scene_stack_available():
+                return
             target = QRectF(rect) if rect is not None else QRectF(self.scene.sceneRect())
             if target.isNull() or target.isEmpty():
                 target = QRectF(self.scene.sceneRect())
-            self.scene.invalidate(target, layers)
-            viewport_rect = self.view.mapFromScene(target).boundingRect()
-            viewport_rect = viewport_rect.adjusted(-4, -4, 4, 4)
-            viewport_rect = viewport_rect.intersected(self.view.viewport().rect())
-            if viewport_rect.isNull() or viewport_rect.isEmpty():
-                self.view.viewport().update()
+            try:
+                self.scene.invalidate(target, layers)
+                viewport_rect = self.view.mapFromScene(target).boundingRect()
+                viewport_rect = viewport_rect.adjusted(-4, -4, 4, 4)
+                viewport_rect = viewport_rect.intersected(self.view.viewport().rect())
+                if viewport_rect.isNull() or viewport_rect.isEmpty():
+                    self.view.viewport().update()
+                    return
+                self.view.viewport().update(viewport_rect)
+            except RuntimeError:
                 return
-            self.view.viewport().update(viewport_rect)
 
     @staticmethod
     def _arrow_path(point: QPointF) -> QPainterPath:
@@ -2307,6 +2238,30 @@ class ProjectGanttView(QWidget):
             self.archiveTaskRequested.emit(int(task_id))
         return True
 
+    def _request_row_color_change(self, row: dict):
+        if not self._row_supports_local_color(row):
+            return
+        chosen = QColorDialog.getColor(
+            self.bar_color_for_row(row),
+            self,
+            "Set Gantt item color",
+        )
+        if not chosen.isValid():
+            return
+        self.itemColorChangeRequested.emit(
+            str(row.get("kind") or ""),
+            int(row.get("item_id") or 0),
+            chosen.name(),
+        )
+
+    def _request_row_color_reset(self, row: dict):
+        if not self._row_supports_local_color(row):
+            return
+        self.itemColorResetRequested.emit(
+            str(row.get("kind") or ""),
+            int(row.get("item_id") or 0),
+        )
+
     def _update_summary_label(self):
         row = self._selected_row()
         if row is None:
@@ -2325,7 +2280,7 @@ class ProjectGanttView(QWidget):
             f"{start} -> {end} | {status}"
         )
 
-    def _open_context_menu_at(self, pos: QPoint):
+    def build_context_menu(self, pos: QPoint) -> QMenu:
         scene_pos = self.view.mapToScene(pos)
         hit_item = self.view.itemAt(pos)
         row = None
@@ -2368,6 +2323,22 @@ class ProjectGanttView(QWidget):
             focus_action = QAction("Focus item", menu)
             focus_action.triggered.connect(lambda: self.activate_row(row))
             menu.addAction(focus_action)
+
+        if self._row_supports_local_color(row):
+            menu.addSeparator()
+            set_color_action = QAction("Set item color…", menu)
+            set_color_action.triggered.connect(
+                lambda: self._request_row_color_change(row)
+            )
+            menu.addAction(set_color_action)
+            reset_color_action = QAction("Reset item color to default", menu)
+            reset_color_action.setEnabled(
+                bool(str(row.get("gantt_color_hex") or "").strip())
+            )
+            reset_color_action.triggered.connect(
+                lambda: self._request_row_color_reset(row)
+            )
+            menu.addAction(reset_color_action)
 
         if row is not None and str(row.get("kind") or "").strip().lower() in {"task", "project"}:
             menu.addSeparator()
@@ -2429,7 +2400,10 @@ class ProjectGanttView(QWidget):
             menu.addAction(move_up_action)
             menu.addAction(move_down_action)
 
-        menu.exec(self.view.viewport().mapToGlobal(pos))
+        return menu
+
+    def _open_context_menu_at(self, pos: QPoint):
+        self.build_context_menu(pos).exec(self.view.viewport().mapToGlobal(pos))
 
     def nudge_selection(self, mode: str, delta_days: int):
         row = self._selected_row()

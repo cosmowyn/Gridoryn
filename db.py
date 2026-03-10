@@ -32,7 +32,7 @@ from project_management import (
 
 
 RECURRENCE_FREQUENCIES = {"daily", "weekly", "monthly", "yearly"}
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 MAX_CATEGORY_FOLDER_DEPTH = 10
 
 
@@ -246,12 +246,60 @@ class Database:
             "start_date",
             "phase_id",
             "category_folder_id",
+            "gantt_color_hex",
         }
         if "tasks" in existing_tables:
             cur.execute("PRAGMA table_info(tasks);")
             task_columns = {str(r["name"]) for r in cur.fetchall()}
             for name in sorted(required_task_columns - task_columns):
                 issues.append(f"Missing required tasks column: {name}")
+
+        required_milestone_columns = {
+            "id",
+            "project_task_id",
+            "title",
+            "description",
+            "phase_id",
+            "linked_task_id",
+            "start_date",
+            "target_date",
+            "baseline_target_date",
+            "status",
+            "progress_percent",
+            "completed_at",
+            "created_at",
+            "updated_at",
+            "gantt_color_hex",
+        }
+        if "milestones" in existing_tables:
+            cur.execute("PRAGMA table_info(milestones);")
+            milestone_columns = {str(r["name"]) for r in cur.fetchall()}
+            for name in sorted(required_milestone_columns - milestone_columns):
+                issues.append(f"Missing required milestones column: {name}")
+
+        required_deliverable_columns = {
+            "id",
+            "project_task_id",
+            "title",
+            "description",
+            "phase_id",
+            "linked_task_id",
+            "linked_milestone_id",
+            "due_date",
+            "baseline_due_date",
+            "acceptance_criteria",
+            "version_ref",
+            "status",
+            "completed_at",
+            "created_at",
+            "updated_at",
+            "gantt_color_hex",
+        }
+        if "deliverables" in existing_tables:
+            cur.execute("PRAGMA table_info(deliverables);")
+            deliverable_columns = {str(r["name"]) for r in cur.fetchall()}
+            for name in sorted(required_deliverable_columns - deliverable_columns):
+                issues.append(f"Missing required deliverables column: {name}")
 
         return {"ok": not issues, "schema_version": version, "issues": issues}
 
@@ -347,6 +395,12 @@ class Database:
             cur.execute("PRAGMA user_version=6;")
             self.conn.commit()
             ver = 6
+
+        if ver < 7:
+            self._migrate_to_v7_gantt_item_colors()
+            cur.execute("PRAGMA user_version=7;")
+            self.conn.commit()
+            ver = 7
 
     def _create_v1(self):
         cur = self.conn.cursor()
@@ -738,6 +792,13 @@ class Database:
             ON tasks(category_folder_id);
             """
         )
+
+    def _migrate_to_v7_gantt_item_colors(self):
+        cur = self.conn.cursor()
+
+        self._add_column_if_missing("tasks", "gantt_color_hex", "TEXT NULL")
+        self._add_column_if_missing("milestones", "gantt_color_hex", "TEXT NULL")
+        self._add_column_if_missing("deliverables", "gantt_color_hex", "TEXT NULL")
 
         cur.execute(
             """
@@ -1721,7 +1782,7 @@ class Database:
                    waiting_for,
                    recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
                    reminder_at, reminder_minutes_before, reminder_fired_at,
-                   start_date, phase_id, category_folder_id
+                   start_date, phase_id, category_folder_id, gantt_color_hex
             FROM tasks
             ORDER BY COALESCE(parent_id, 0), sort_order ASC, id ASC;
             """
@@ -1820,7 +1881,7 @@ class Database:
                    waiting_for,
                    recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
                    reminder_at, reminder_minutes_before, reminder_fired_at,
-                   start_date, phase_id, category_folder_id
+                   start_date, phase_id, category_folder_id, gantt_color_hex
             FROM tasks
             WHERE id=?;
             """,
@@ -1986,7 +2047,8 @@ class Database:
                     reminder_fired_at=?,
                     start_date=?,
                     phase_id=?,
-                    category_folder_id=?
+                    category_folder_id=?,
+                    gantt_color_hex=?
                 WHERE id=?;
                 """,
                 (
@@ -2014,6 +2076,7 @@ class Database:
                     snapshot.get("start_date"),
                     snapshot.get("phase_id"),
                     snapshot.get("category_folder_id"),
+                    str(snapshot.get("gantt_color_hex") or "").strip() or None,
                     tid,
                 ),
             )
@@ -2157,6 +2220,7 @@ class Database:
         task_data.setdefault("start_date", None)
         task_data.setdefault("phase_id", None)
         task_data.setdefault("category_folder_id", None)
+        task_data.setdefault("gantt_color_hex", None)
 
         with self.tx():
             cur = self.conn.cursor()
@@ -2171,8 +2235,8 @@ class Database:
                                       waiting_for,
                                       recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
                                       reminder_at, reminder_minutes_before, reminder_fired_at,
-                                      start_date, phase_id, category_folder_id)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      start_date, phase_id, category_folder_id, gantt_color_hex)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         task_data["id"], task_data["description"], task_data["due_date"], task_data["last_update"],
@@ -2194,6 +2258,7 @@ class Database:
                         task_data.get("start_date"),
                         task_data.get("phase_id"),
                         task_data.get("category_folder_id"),
+                        str(task_data.get("gantt_color_hex") or "").strip() or None,
                     ),
                 )
                 task_id = int(task_data["id"])
@@ -2207,8 +2272,8 @@ class Database:
                                       waiting_for,
                                       recurrence_rule_id, recurrence_origin_task_id, is_generated_occurrence,
                                       reminder_at, reminder_minutes_before, reminder_fired_at,
-                                      start_date, phase_id, category_folder_id)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      start_date, phase_id, category_folder_id, gantt_color_hex)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         task_data["description"], task_data["due_date"], task_data["last_update"],
@@ -2230,6 +2295,7 @@ class Database:
                         task_data.get("start_date"),
                         task_data.get("phase_id"),
                         task_data.get("category_folder_id"),
+                        str(task_data.get("gantt_color_hex") or "").strip() or None,
                     ),
                 )
                 task_id = int(cur.lastrowid)
@@ -2285,6 +2351,7 @@ class Database:
             "is_generated_occurrence",
             "start_date",
             "phase_id",
+            "gantt_color_hex",
         }
         if field not in allowed:
             raise ValueError("Invalid field")
@@ -2321,6 +2388,7 @@ class Database:
             "sort_order",
             "start_date",
             "phase_id",
+            "gantt_color_hex",
         }
         pairs = []
         params = []
@@ -3707,6 +3775,7 @@ class Database:
             SELECT m.id, m.project_task_id, m.title, m.description, m.phase_id, m.linked_task_id,
                    m.start_date, m.target_date, m.baseline_target_date,
                    m.status, m.progress_percent, m.completed_at, m.created_at, m.updated_at,
+                   m.gantt_color_hex,
                    pp.name AS phase_name,
                    t.description AS linked_task_description
             FROM milestones m
@@ -3777,7 +3846,7 @@ class Database:
                     """
                     UPDATE milestones
                     SET title=?, description=?, phase_id=?, linked_task_id=?, start_date=?, target_date=?,
-                        baseline_target_date=?, status=?, progress_percent=?, completed_at=?, updated_at=?
+                        baseline_target_date=?, status=?, progress_percent=?, completed_at=?, gantt_color_hex=?, updated_at=?
                     WHERE id=?;
                     """,
                     (
@@ -3791,6 +3860,7 @@ class Database:
                         status,
                         progress,
                         payload.get("completed_at"),
+                        str(payload.get("gantt_color_hex") or "").strip() or None,
                         now_iso(),
                         int(milestone_id),
                     ),
@@ -3811,10 +3881,11 @@ class Database:
                         status,
                         progress_percent,
                         completed_at,
+                        gantt_color_hex,
                         created_at,
                         updated_at
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         int(project_task_id),
@@ -3828,6 +3899,7 @@ class Database:
                         status,
                         progress,
                         payload.get("completed_at"),
+                        str(payload.get("gantt_color_hex") or "").strip() or None,
                         now_iso(),
                         now_iso(),
                     ),
@@ -3869,10 +3941,11 @@ class Database:
                     status,
                     progress_percent,
                     completed_at,
+                    gantt_color_hex,
                     created_at,
                     updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     project_task_id=excluded.project_task_id,
                     title=excluded.title,
@@ -3885,6 +3958,7 @@ class Database:
                     status=excluded.status,
                     progress_percent=excluded.progress_percent,
                     completed_at=excluded.completed_at,
+                    gantt_color_hex=excluded.gantt_color_hex,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at;
                 """,
@@ -3901,6 +3975,7 @@ class Database:
                     str(snapshot.get("status") or "planned"),
                     int(snapshot.get("progress_percent") or 0),
                     snapshot.get("completed_at"),
+                    str(snapshot.get("gantt_color_hex") or "").strip() or None,
                     snapshot.get("created_at") or now_iso(),
                     snapshot.get("updated_at") or now_iso(),
                 ),
@@ -3910,6 +3985,15 @@ class Database:
             list(snapshot.get("dependencies") or []),
         )
 
+    def set_milestone_gantt_color(self, milestone_id: int, color_hex: str | None):
+        normalized = str(color_hex or "").strip() or None
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE milestones SET gantt_color_hex=?, updated_at=? WHERE id=?;",
+                (normalized, now_iso(), int(milestone_id)),
+            )
+
     def fetch_project_deliverables(self, project_task_id: int) -> list[dict]:
         cur = self.conn.cursor()
         cur.execute(
@@ -3917,6 +4001,7 @@ class Database:
             SELECT d.id, d.project_task_id, d.title, d.description, d.phase_id, d.linked_task_id,
                    d.linked_milestone_id, d.due_date, d.baseline_due_date, d.acceptance_criteria,
                    d.version_ref, d.status, d.completed_at, d.created_at, d.updated_at,
+                   d.gantt_color_hex,
                    pp.name AS phase_name,
                    t.description AS linked_task_description,
                    m.title AS linked_milestone_title
@@ -3972,7 +4057,7 @@ class Database:
                     UPDATE deliverables
                     SET title=?, description=?, phase_id=?, linked_task_id=?, linked_milestone_id=?,
                         due_date=?, baseline_due_date=?, acceptance_criteria=?, version_ref=?,
-                        status=?, completed_at=?, updated_at=?
+                        status=?, completed_at=?, gantt_color_hex=?, updated_at=?
                     WHERE id=?;
                     """,
                     (
@@ -3987,6 +4072,7 @@ class Database:
                         str(payload.get("version_ref") or ""),
                         status,
                         payload.get("completed_at"),
+                        str(payload.get("gantt_color_hex") or "").strip() or None,
                         now_iso(),
                         int(deliverable_id),
                     ),
@@ -4008,10 +4094,11 @@ class Database:
                     version_ref,
                     status,
                     completed_at,
+                    gantt_color_hex,
                     created_at,
                     updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     int(project_task_id),
@@ -4026,6 +4113,7 @@ class Database:
                     str(payload.get("version_ref") or ""),
                     status,
                     payload.get("completed_at"),
+                    str(payload.get("gantt_color_hex") or "").strip() or None,
                     now_iso(),
                     now_iso(),
                 ),
@@ -4058,10 +4146,11 @@ class Database:
                     version_ref,
                     status,
                     completed_at,
+                    gantt_color_hex,
                     created_at,
                     updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     project_task_id=excluded.project_task_id,
                     title=excluded.title,
@@ -4075,6 +4164,7 @@ class Database:
                     version_ref=excluded.version_ref,
                     status=excluded.status,
                     completed_at=excluded.completed_at,
+                    gantt_color_hex=excluded.gantt_color_hex,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at;
                 """,
@@ -4092,9 +4182,19 @@ class Database:
                     str(snapshot.get("version_ref") or ""),
                     str(snapshot.get("status") or "planned"),
                     snapshot.get("completed_at"),
+                    str(snapshot.get("gantt_color_hex") or "").strip() or None,
                     snapshot.get("created_at") or now_iso(),
                     snapshot.get("updated_at") or now_iso(),
                 ),
+            )
+
+    def set_deliverable_gantt_color(self, deliverable_id: int, color_hex: str | None):
+        normalized = str(color_hex or "").strip() or None
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE deliverables SET gantt_color_hex=?, updated_at=? WHERE id=?;",
+                (normalized, now_iso(), int(deliverable_id)),
             )
 
     def fetch_project_register_entries(self, project_task_id: int, entry_type: str | None = None) -> list[dict]:
@@ -4576,6 +4676,15 @@ class Database:
                 (int(task_id), p, str(label or "").strip(), now_iso()),
             )
             cur.execute("UPDATE tasks SET last_update=? WHERE id=?;", (now_iso(), int(task_id)))
+
+    def set_task_gantt_color(self, task_id: int, color_hex: str | None):
+        normalized = str(color_hex or "").strip() or None
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE tasks SET gantt_color_hex=?, last_update=? WHERE id=?;",
+                (normalized, now_iso(), int(task_id)),
+            )
             return int(cur.lastrowid)
 
     def fetch_attachment_by_id(self, attachment_id: int) -> dict | None:
@@ -4753,6 +4862,7 @@ class Database:
                 "status": str(row.get("status") or "planned"),
                 "progress_percent": int(row.get("progress_percent") or 0),
                 "completed_at": row.get("completed_at"),
+                "gantt_color_hex": str(row.get("gantt_color_hex") or "").strip() or None,
                 "dependencies": list(row.get("dependencies") or []),
             }
             for row in self.fetch_project_milestones(project_id)
@@ -4774,6 +4884,7 @@ class Database:
                 "version_ref": str(row.get("version_ref") or ""),
                 "status": str(row.get("status") or "planned"),
                 "completed_at": row.get("completed_at"),
+                "gantt_color_hex": str(row.get("gantt_color_hex") or "").strip() or None,
             }
             for row in self.fetch_project_deliverables(project_id)
             if (
@@ -4972,10 +5083,11 @@ class Database:
                         status,
                         progress_percent,
                         completed_at,
+                        gantt_color_hex,
                         created_at,
                         updated_at
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         int(new_root_id),
@@ -4989,6 +5101,7 @@ class Database:
                         normalize_record_status(milestone.get("status"), MILESTONE_STATUSES, "planned"),
                         int(milestone.get("progress_percent") or 0),
                         milestone.get("completed_at"),
+                        str(milestone.get("gantt_color_hex") or "").strip() or None,
                         stamp,
                         stamp,
                     ),
@@ -5026,10 +5139,11 @@ class Database:
                         version_ref,
                         status,
                         completed_at,
+                        gantt_color_hex,
                         created_at,
                         updated_at
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         int(new_root_id),
@@ -5044,6 +5158,7 @@ class Database:
                         str(deliverable.get("version_ref") or ""),
                         normalize_record_status(deliverable.get("status"), DELIVERABLE_STATUSES, "planned"),
                         deliverable.get("completed_at"),
+                        str(deliverable.get("gantt_color_hex") or "").strip() or None,
                         stamp,
                         stamp,
                     ),

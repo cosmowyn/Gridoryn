@@ -110,7 +110,7 @@ def test_collect_and_repair_integrity_report(tmp_path):
 
     report = db.collect_integrity_report(include_attachment_scan=True)
 
-    assert report["schema_version"] == 6
+    assert report["schema_version"] == 7
     assert len(report["broken_parent_links"]) == 1
     assert len(report["invalid_sibling_sort_orders"]) == 2
     assert len(report["orphaned_custom_values"]["missing_tasks"]) == 1

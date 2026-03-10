@@ -540,6 +540,8 @@ class ProjectCockpitPanel(QWidget):
     editMilestoneDependenciesRequested = Signal(int, list)
     timelineTaskMoveRelativeRequested = Signal(int, int)
     timelineTaskMoveRequested = Signal(int, object, int)
+    timelineItemColorRequested = Signal(str, int, object)
+    timelineItemColorResetRequested = Signal(str, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -993,6 +995,12 @@ class ProjectCockpitPanel(QWidget):
         self.timeline_widget.taskMoveRelativeRequested.connect(
             self.timelineTaskMoveRelativeRequested.emit
         )
+        self.timeline_widget.itemColorChangeRequested.connect(
+            self.timelineItemColorRequested.emit
+        )
+        self.timeline_widget.itemColorResetRequested.connect(
+            self.timelineItemColorResetRequested.emit
+        )
         self.timeline_widget.archiveTaskRequested.connect(
             self.archiveTaskRequested.emit
         )
@@ -1048,6 +1056,7 @@ class ProjectCockpitPanel(QWidget):
                 str(row.get("display_start_date") or row.get("start_date") or ""),
                 str(row.get("display_end_date") or row.get("end_date") or ""),
                 str(row.get("baseline_date") or ""),
+                str(row.get("gantt_color_hex") or ""),
                 int(row.get("sort_index") or 0),
             )
             for row in (dashboard.get("timeline_rows") or [])

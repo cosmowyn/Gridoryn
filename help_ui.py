@@ -492,14 +492,14 @@ HELP_CHAPTERS: list[HelpChapter] = [
             <li><strong>Tasks, milestones, and deliverables can be dragged horizontally</strong> to move scheduled work directly from the chart.</li>
             <li><strong>Task bars can be resized from the left and right edges</strong> to adjust start and due dates with day-based snapping.</li>
             <li><strong>Double-click empty timeline space to add a new task at that date</strong>. The new bar is selected immediately so you can drag or resize it without leaving the chart.</li>
-            <li><strong>Milestones use a dedicated diamond marker</strong>, while summary rows roll up child spans, use a distinct parent-bar style, and now show the parent task name directly in the chart whenever space allows.</li>
+            <li><strong>Milestones use a dedicated diamond marker</strong>, while summary rows roll up child spans and use a distinct parent-bar style so hierarchy stays legible without relying on large inline bar labels.</li>
             <li><strong>The timeline includes Today, Selected, Fit project, and Fit selection controls</strong>, along with Day, Week, and Month zoom levels.</li>
             <li><strong>{_sc("Ctrl")}+mouse-wheel zooms the chart</strong> and supported trackpad pinch gestures use the same zoom state. The left/right arrow keys nudge the selected item by day. Use <code>Alt+Left/Right</code> to resize task starts and <code>Shift+Left/Right</code> to resize task ends.</li>
-            <li><strong>Right-click the chart for contextual planning actions</strong> such as adding tasks, child tasks, milestones, deliverables, dependency editing, row movement, archive, permanent delete, and view navigation.</li>
+            <li><strong>Right-click the chart for contextual planning actions</strong> such as adding tasks, child tasks, milestones, deliverables, dependency editing, row movement, per-item color overrides, archive, permanent delete, and view navigation.</li>
             <li><strong>Timeline selection stays synchronized</strong> with the project cockpit tables, task tree, details panel, and relationship inspector.</li>
             <li><strong>Task and project rows can be archived or permanently deleted from the cockpit</strong>, so items created from the planner can also be cleaned up there without returning to the main task tree.</li>
             <li><strong>Timeline rescheduling participates in undo/redo</strong>, including milestone and deliverable date moves.</li>
-            <li><strong>Settings &amp; Themes includes dedicated Gantt bar colors</strong> for ordinary task bars and parent/summary bars, including separate text colors for both.</li>
+            <li><strong>Settings &amp; Themes includes dedicated Gantt bar colors</strong> for ordinary task bars and parent/summary bars, and you can override individual chart items locally from the timeline context menu for project-specific visual planning.</li>
             <li><strong>Workload</strong> summarizes planned effort by day and week to highlight overcommitment for a single local user.</li>
             <li><strong>Health</strong> can be overridden manually, but the app also infers risk from overdue work, blockers, inactivity, and scope-related register entries.</li>
             <li><strong>The main task tree now includes a compact Health column</strong> so project risk is visible even when the cockpit is closed.</li>

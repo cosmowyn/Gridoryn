@@ -1388,6 +1388,49 @@ class TaskTreeModel(QAbstractItemModel):
             )
         )
 
+    def set_timeline_item_color(self, kind: str, item_id: int, color_hex: str | None):
+        normalized_kind = str(kind or "").strip().lower()
+        normalized_color = str(color_hex or "").strip() or None
+        if normalized_kind in {"task", "project"}:
+            task_id = int(item_id)
+
+            def apply():
+                self.db.set_task_gantt_color(task_id, normalized_color)
+
+            self.undo_stack.push(
+                TaskMutationCommand(
+                    self,
+                    task_id,
+                    "Set Gantt item color" if normalized_color else "Reset Gantt item color",
+                    apply,
+                    refresh_mode="single",
+                )
+            )
+            return
+
+        if normalized_kind == "milestone":
+            milestone_id = int(item_id)
+            self.undo_stack.push(
+                MilestoneMutationCommand(
+                    self,
+                    milestone_id,
+                    "Set Gantt item color" if normalized_color else "Reset Gantt item color",
+                    lambda: self.db.set_milestone_gantt_color(milestone_id, normalized_color),
+                )
+            )
+            return
+
+        if normalized_kind == "deliverable":
+            deliverable_id = int(item_id)
+            self.undo_stack.push(
+                DeliverableMutationCommand(
+                    self,
+                    deliverable_id,
+                    "Set Gantt item color" if normalized_color else "Reset Gantt item color",
+                    lambda: self.db.set_deliverable_gantt_color(deliverable_id, normalized_color),
+                )
+            )
+
     def fetch_project_milestones(self, project_task_id: int) -> list[dict]:
         return self.db.fetch_project_milestones(int(project_task_id))
 

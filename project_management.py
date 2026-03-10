@@ -596,6 +596,7 @@ def build_timeline_rows(
             "status": str(summary.get("effective_health") or "on_track"),
             "blocked": bool(summary.get("effective_health") in {"blocked", "awaiting_external_input"}),
             "progress_percent": int(project_task.get("progress_percent") or 0),
+            "gantt_color_hex": str(project_task.get("gantt_color_hex") or "").strip() or None,
             "summary_row": True,
             "render_style": "summary",
             "editable_move": False,
@@ -681,6 +682,7 @@ def build_timeline_rows(
                     if str(task_row.get("status") or "") == "Done"
                     else int(task_row.get("progress_percent") or 0)
                 ),
+                "gantt_color_hex": str(task_row.get("gantt_color_hex") or "").strip() or None,
                 "summary_row": has_children,
                 "render_style": "summary" if has_children else "task",
                 "editable_move": not has_children,
@@ -717,6 +719,7 @@ def build_timeline_rows(
                 "status": "",
                 "blocked": False,
                 "progress_percent": 0,
+                "gantt_color_hex": None,
                 "summary_row": True,
                 "render_style": "summary",
                 "editable_move": False,
@@ -749,6 +752,7 @@ def build_timeline_rows(
                     "status": str(milestone.get("status") or "planned"),
                     "blocked": bool(milestone.get("is_blocked")),
                     "progress_percent": int(milestone.get("progress_percent") or 0),
+                    "gantt_color_hex": str(milestone.get("gantt_color_hex") or "").strip() or None,
                     "summary_row": False,
                     "render_style": "milestone",
                     "editable_move": True,
@@ -778,6 +782,7 @@ def build_timeline_rows(
                     "progress_percent": (
                         100 if str(deliverable.get("status") or "") == "completed" else 0
                     ),
+                    "gantt_color_hex": str(deliverable.get("gantt_color_hex") or "").strip() or None,
                     "summary_row": False,
                     "render_style": "deliverable",
                     "editable_move": True,
