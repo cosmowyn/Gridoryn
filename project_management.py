@@ -719,7 +719,11 @@ def build_timeline_rows(
                 "status": "",
                 "blocked": False,
                 "progress_percent": 0,
-                "gantt_color_hex": None,
+                "gantt_color_hex": (
+                    str(phase_map.get(int(phase_id), {}).get("gantt_color_hex") or "").strip() or None
+                    if phase_id is not None
+                    else None
+                ),
                 "summary_row": True,
                 "render_style": "summary",
                 "editable_move": False,

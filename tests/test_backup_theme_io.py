@@ -21,6 +21,9 @@ def _ini_settings(path) -> QSettings:
 def test_backup_import_roundtrip_and_replace(tmp_path, monkeypatch):
     source = Database(str(tmp_path / "source.sqlite3"))
     populate_demo_database(source)
+    first_project_id = int(source.list_project_profiles()[0]["task_id"])
+    first_phase = next(row for row in source.fetch_project_phases(first_project_id) if row["name"] == "Planning")
+    source.set_project_phase_gantt_color(int(first_phase["id"]), "#663399")
     payload = export_payload(source)
     source_projects = source.list_project_profiles()
     source_project_ids = [int(row["task_id"]) for row in source_projects]
@@ -59,6 +62,11 @@ def test_backup_import_roundtrip_and_replace(tmp_path, monkeypatch):
         sum(len(target.fetch_project_register_entries(project_id)) for project_id in source_project_ids)
         == sum(len(source.fetch_project_register_entries(project_id)) for project_id in source_project_ids)
     )
+    imported_first_phase = next(
+        row for row in target.fetch_project_phases(first_project_id)
+        if row["name"] == "Planning"
+    )
+    assert str(imported_first_phase.get("gantt_color_hex") or "").lower() == "#663399"
 
 
 def test_backup_import_merge_and_missing_custom_columns(tmp_path, monkeypatch):

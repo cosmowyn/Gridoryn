@@ -219,16 +219,21 @@ def test_gantt_view_uses_local_item_color_override_before_defaults(qapp):
 
     task_row = widget.row_lookup["task:3"]
     summary_row = widget.row_lookup["project:1"]
+    phase_row = widget.row_lookup["phase:10"]
     default_task_color = widget.bar_color_for_row(task_row).name().lower()
     default_summary_color = widget.bar_color_for_row(summary_row).name().lower()
+    default_phase_color = widget.bar_color_for_row(phase_row).name().lower()
 
     task_row["gantt_color_hex"] = "#334455"
     summary_row["gantt_color_hex"] = "#eeddee"
+    phase_row["gantt_color_hex"] = "#552277"
 
     assert widget.bar_color_for_row(task_row).name().lower() == "#334455"
     assert widget.bar_color_for_row(summary_row).name().lower() == "#eeddee"
+    assert widget.bar_color_for_row(phase_row).name().lower() == "#552277"
     assert default_task_color != "#334455"
     assert default_summary_color != "#eeddee"
+    assert default_phase_color != "#552277"
 
 
 def test_gantt_view_uses_persisted_theme_colors_for_task_and_summary_bars(qapp):
@@ -321,6 +326,39 @@ def test_gantt_context_menu_emits_item_color_actions(qapp):
 
     assert changed and changed[0][0:2] == ("task", 2)
     assert reset == [("task", 2)]
+
+
+def test_gantt_context_menu_supports_phase_color_actions(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+    widget.show()
+    qapp.processEvents()
+
+    widget.row_lookup["phase:10"]["gantt_color_hex"] = "#553377"
+    phase_item = widget.bar_items["phase:10"]
+    phase_pos = widget.view.mapFromScene(phase_item.base_rect().center())
+    menu = widget.build_context_menu(phase_pos)
+    labels = [action.text() for action in menu.actions()]
+
+    assert "Set item color…" in labels
+    assert "Reset item color to default" in labels
+
+    changed: list[tuple[str, int, object]] = []
+    reset: list[tuple[str, int]] = []
+    widget.itemColorChangeRequested.connect(
+        lambda kind, item_id, color: changed.append((str(kind), int(item_id), color))
+    )
+    widget.itemColorResetRequested.connect(
+        lambda kind, item_id: reset.append((str(kind), int(item_id)))
+    )
+
+    with patch("gantt_ui.QColorDialog.getColor", return_value=widget.bar_color_for_row(widget.row_lookup["phase:10"]).lighter(120)):
+        next(action for action in menu.actions() if action.text() == "Set item color…").trigger()
+    next(action for action in menu.actions() if action.text() == "Reset item color to default").trigger()
+
+    assert changed and changed[0][0:2] == ("phase", 10)
+    assert reset == [("phase", 10)]
 
 
 def test_timeline_header_uses_separate_bands_and_keeps_today_badge_out_of_minor_row(qapp):

@@ -283,6 +283,33 @@ class DeliverableMutationCommand(QUndoCommand):
         self.model.reload_all(reset_header_state=False)
 
 
+class ProjectPhaseMutationCommand(QUndoCommand):
+    def __init__(self, model, phase_id: int, text: str, apply_fn):
+        super().__init__(text)
+        self.model = model
+        self.phase_id = int(phase_id)
+        self.apply_fn = apply_fn
+        self.before = deepcopy(model.capture_project_phase_snapshot(self.phase_id))
+        self.after = None
+
+    def redo(self):
+        if self.after is None:
+            self.apply_fn()
+            self.after = deepcopy(self.model.capture_project_phase_snapshot(self.phase_id))
+            if self.after == self.before:
+                self.setObsolete(True)
+                return
+        else:
+            self.model._restore_project_phase_snapshot(self.after)
+        self.model.reload_all(reset_header_state=False)
+
+    def undo(self):
+        if self.before is None:
+            return
+        self.model._restore_project_phase_snapshot(self.before)
+        self.model.reload_all(reset_header_state=False)
+
+
 class CreateTasksFromPayloadCommand(QUndoCommand):
     def __init__(self, model, payload: dict, parent_id: int | None = None, text: str = "Create tasks"):
         super().__init__(text)

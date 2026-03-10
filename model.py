@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QUndoStack, QIcon, QFont
 from commands import (
     AddTaskCommand, DeleteSubtreeCommand, EditCellCommand, MoveNodeCommand,
     AddCustomColumnCommand, RemoveCustomColumnCommand,
-    DeliverableMutationCommand, MilestoneMutationCommand, TaskMutationCommand,
+    DeliverableMutationCommand, MilestoneMutationCommand, ProjectPhaseMutationCommand, TaskMutationCommand,
     TaskCollectionMutationCommand, CreateTasksFromPayloadCommand,
 )
 from category_folders_ui import folder_display_name, folder_icon
@@ -1359,6 +1359,12 @@ class TaskTreeModel(QAbstractItemModel):
     def fetch_project_phases(self, project_task_id: int) -> list[dict]:
         return self.db.fetch_project_phases(int(project_task_id))
 
+    def capture_project_phase_snapshot(self, phase_id: int) -> dict | None:
+        return self.db.fetch_project_phase_by_id(int(phase_id))
+
+    def _restore_project_phase_snapshot(self, snapshot: dict):
+        self.db.restore_project_phase_snapshot(snapshot)
+
     def add_project_phase(self, project_task_id: int, name: str) -> int:
         phase_id = self.db.add_project_phase(int(project_task_id), name)
         self.reload_all(reset_header_state=False)
@@ -1404,6 +1410,18 @@ class TaskTreeModel(QAbstractItemModel):
                     "Set Gantt item color" if normalized_color else "Reset Gantt item color",
                     apply,
                     refresh_mode="single",
+                )
+            )
+            return
+
+        if normalized_kind == "phase":
+            phase_id = int(item_id)
+            self.undo_stack.push(
+                ProjectPhaseMutationCommand(
+                    self,
+                    phase_id,
+                    "Set Gantt item color" if normalized_color else "Reset Gantt item color",
+                    lambda: self.db.set_project_phase_gantt_color(phase_id, normalized_color),
                 )
             )
             return

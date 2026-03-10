@@ -286,7 +286,7 @@ def export_payload(db: Database) -> dict:
 
     cur.execute(
         """
-        SELECT id, project_task_id, name, sort_order, created_at, updated_at
+        SELECT id, project_task_id, name, sort_order, gantt_color_hex, created_at, updated_at
         FROM project_phases
         ORDER BY project_task_id, sort_order, id;
         """
@@ -1231,13 +1231,14 @@ def _import_project_profiles_and_phases(
             continue
         cur.execute(
             """
-            INSERT INTO project_phases(project_task_id, name, sort_order, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?);
+            INSERT INTO project_phases(project_task_id, name, sort_order, gantt_color_hex, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?, ?);
             """,
             (
                 int(new_project_id),
                 str(row.get("name") or ""),
                 int(row.get("sort_order") or 1),
+                str(row.get("gantt_color_hex") or "").strip() or None,
                 str(row.get("created_at") or now_iso()),
                 str(row.get("updated_at") or now_iso()),
             ),

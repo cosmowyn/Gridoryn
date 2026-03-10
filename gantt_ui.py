@@ -1311,12 +1311,10 @@ class ProjectGanttView(QWidget):
     def _row_supports_local_color(row: dict | None) -> bool:
         if not isinstance(row, dict):
             return False
-        return str(row.get("kind") or "").strip().lower() in {
-            "project",
-            "task",
-            "milestone",
-            "deliverable",
-        }
+        kind = str(row.get("kind") or "").strip().lower()
+        if kind == "phase":
+            return int(row.get("item_id") or 0) > 0
+        return kind in {"project", "task", "milestone", "deliverable"}
 
     def row_is_editable(self, row: dict) -> bool:
         return bool(row.get("editable_move") or row.get("editable_start") or row.get("editable_end"))

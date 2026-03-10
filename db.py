@@ -32,7 +32,7 @@ from project_management import (
 
 
 RECURRENCE_FREQUENCIES = {"daily", "weekly", "monthly", "yearly"}
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 8
 MAX_CATEGORY_FOLDER_DEPTH = 10
 
 
@@ -301,6 +301,21 @@ class Database:
             for name in sorted(required_deliverable_columns - deliverable_columns):
                 issues.append(f"Missing required deliverables column: {name}")
 
+        required_phase_columns = {
+            "id",
+            "project_task_id",
+            "name",
+            "sort_order",
+            "gantt_color_hex",
+            "created_at",
+            "updated_at",
+        }
+        if "project_phases" in existing_tables:
+            cur.execute("PRAGMA table_info(project_phases);")
+            phase_columns = {str(r["name"]) for r in cur.fetchall()}
+            for name in sorted(required_phase_columns - phase_columns):
+                issues.append(f"Missing required project_phases column: {name}")
+
         return {"ok": not issues, "schema_version": version, "issues": issues}
 
     def schema_validation_report(self) -> dict:
@@ -401,6 +416,12 @@ class Database:
             cur.execute("PRAGMA user_version=7;")
             self.conn.commit()
             ver = 7
+
+        if ver < 8:
+            self._migrate_to_v8_phase_gantt_colors()
+            cur.execute("PRAGMA user_version=8;")
+            self.conn.commit()
+            ver = 8
 
     def _create_v1(self):
         cur = self.conn.cursor()
@@ -655,6 +676,7 @@ class Database:
                 project_task_id  INTEGER NOT NULL,
                 name             TEXT    NOT NULL,
                 sort_order       INTEGER NOT NULL DEFAULT 1,
+                gantt_color_hex  TEXT    NULL,
                 created_at       TEXT    NOT NULL,
                 updated_at       TEXT    NOT NULL,
                 UNIQUE(project_task_id, name),
@@ -832,6 +854,9 @@ class Database:
             """,
             (now_iso(),),
         )
+
+    def _migrate_to_v8_phase_gantt_colors(self):
+        self._add_column_if_missing("project_phases", "gantt_color_hex", "TEXT NULL")
 
     @contextmanager
     def tx(self):
@@ -3351,7 +3376,7 @@ class Database:
         cur = self.conn.cursor()
         cur.execute(
             """
-            SELECT id, project_task_id, name
+            SELECT id, project_task_id, name, sort_order, gantt_color_hex, created_at, updated_at
             FROM project_phases
             WHERE id=?;
             """,
@@ -3440,13 +3465,14 @@ class Database:
         for phase in default_phases_payload(int(project_task_id), stamp):
             cur.execute(
                 """
-                INSERT INTO project_phases(project_task_id, name, sort_order, created_at, updated_at)
-                VALUES(?, ?, ?, ?, ?);
+                INSERT INTO project_phases(project_task_id, name, sort_order, gantt_color_hex, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?);
                 """,
                 (
                     int(phase["project_task_id"]),
                     str(phase["name"]),
                     int(phase["sort_order"]),
+                    str(phase.get("gantt_color_hex") or "").strip() or None,
                     str(phase["created_at"]),
                     str(phase["updated_at"]),
                 ),
@@ -3562,7 +3588,7 @@ class Database:
         cur = self.conn.cursor()
         cur.execute(
             """
-            SELECT id, project_task_id, name, sort_order, created_at, updated_at
+            SELECT id, project_task_id, name, sort_order, gantt_color_hex, created_at, updated_at
             FROM project_phases
             WHERE project_task_id=?
             ORDER BY sort_order ASC, id ASC;
@@ -3570,6 +3596,9 @@ class Database:
             (int(project_task_id),),
         )
         return [dict(row) for row in cur.fetchall()]
+
+    def fetch_project_phase_by_id(self, phase_id: int) -> dict | None:
+        return self._phase_record(int(phase_id))
 
     def add_project_phase(self, project_task_id: int, name: str) -> int:
         phase_name = str(name or "").strip()
@@ -3585,10 +3614,10 @@ class Database:
             next_order = int(cur.fetchone()["next_order"])
             cur.execute(
                 """
-                INSERT INTO project_phases(project_task_id, name, sort_order, created_at, updated_at)
-                VALUES(?, ?, ?, ?, ?);
+                INSERT INTO project_phases(project_task_id, name, sort_order, gantt_color_hex, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?);
                 """,
-                (int(project_task_id), phase_name, next_order, now_iso(), now_iso()),
+                (int(project_task_id), phase_name, next_order, None, now_iso(), now_iso()),
             )
             return int(cur.lastrowid)
 
@@ -3603,6 +3632,16 @@ class Database:
                 (phase_name, now_iso(), int(phase_id)),
             )
 
+    def set_project_phase_gantt_color(self, phase_id: int, color_hex: str | None):
+        if not self._phase_record(int(phase_id)):
+            raise ValueError("Phase not found.")
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE project_phases SET gantt_color_hex=?, updated_at=? WHERE id=?;",
+                (str(color_hex or "").strip() or None, now_iso(), int(phase_id)),
+            )
+
     def delete_project_phase(self, phase_id: int):
         with self.tx():
             cur = self.conn.cursor()
@@ -3610,6 +3649,42 @@ class Database:
             cur.execute("UPDATE milestones SET phase_id=NULL WHERE phase_id=?;", (int(phase_id),))
             cur.execute("UPDATE deliverables SET phase_id=NULL WHERE phase_id=?;", (int(phase_id),))
             cur.execute("DELETE FROM project_phases WHERE id=?;", (int(phase_id),))
+
+    def restore_project_phase_snapshot(self, snapshot: dict):
+        if not snapshot:
+            raise ValueError("Project phase snapshot is required.")
+        with self.tx():
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO project_phases(
+                    id,
+                    project_task_id,
+                    name,
+                    sort_order,
+                    gantt_color_hex,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    project_task_id=excluded.project_task_id,
+                    name=excluded.name,
+                    sort_order=excluded.sort_order,
+                    gantt_color_hex=excluded.gantt_color_hex,
+                    created_at=excluded.created_at,
+                    updated_at=excluded.updated_at;
+                """,
+                (
+                    int(snapshot["id"]),
+                    int(snapshot["project_task_id"]),
+                    str(snapshot.get("name") or ""),
+                    int(snapshot.get("sort_order") or 1),
+                    str(snapshot.get("gantt_color_hex") or "").strip() or None,
+                    str(snapshot.get("created_at") or now_iso()),
+                    str(snapshot.get("updated_at") or now_iso()),
+                ),
+            )
 
     def set_task_phase(self, task_id: int, phase_id: int | None):
         phase_value = None if phase_id is None else int(phase_id)
@@ -4945,6 +5020,7 @@ class Database:
                     "id": int(row["id"]),
                     "name": str(row.get("name") or ""),
                     "sort_order": int(row.get("sort_order") or 0),
+                    "gantt_color_hex": str(row.get("gantt_color_hex") or "").strip() or None,
                 }
                 for row in phases
                 if row.get("id") is not None and int(row["id"]) in included_phases
@@ -5034,13 +5110,14 @@ class Database:
             for phase in phases:
                 cur.execute(
                     """
-                    INSERT INTO project_phases(project_task_id, name, sort_order, created_at, updated_at)
-                    VALUES(?, ?, ?, ?, ?);
+                    INSERT INTO project_phases(project_task_id, name, sort_order, gantt_color_hex, created_at, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?);
                     """,
                     (
                         int(new_root_id),
                         str(phase.get("name") or ""),
                         int(phase.get("sort_order") or 0),
+                        str(phase.get("gantt_color_hex") or "").strip() or None,
                         stamp,
                         stamp,
                     ),

@@ -466,6 +466,7 @@ def test_project_root_template_roundtrip_preserves_project_state(tmp_path, qapp)
     db.set_task_phase(task_one, int(planning_phase["id"]))
     db.set_task_phase(task_two, int(execution_phase["id"]))
     db.set_task_dependencies(task_two, [task_one])
+    db.set_project_phase_gantt_color(int(planning_phase["id"]), "#552277")
     db.set_task_gantt_color(project_id, "#223344")
     db.set_task_gantt_color(task_one, "#446688")
 
@@ -539,6 +540,8 @@ def test_project_root_template_roundtrip_preserves_project_state(tmp_path, qapp)
     assert new_dashboard["profile"]["owner"] == "Alice"
     assert new_dashboard["baseline"]["effort_minutes"] == 360
     assert str(new_dashboard["project"].get("gantt_color_hex") or "").lower() == "#223344"
+    new_phases = {str(row["name"]): row for row in new_dashboard["phases"]}
+    assert str(new_phases["Planning"].get("gantt_color_hex") or "").lower() == "#552277"
 
     new_tasks = {
         str(row["description"]): row
