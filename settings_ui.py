@@ -592,6 +592,7 @@ class SettingsDialog(QDialog):
         self.custom_qss.setPlaceholderText(
             "Optional: add custom Qt StyleSheet (QSS) here.\n"
             "This is appended after the generated theme QSS, so it can override anything.\n"
+            "See Help > QSS Styling for stable object names and selector examples.\n"
         )
         add_form_row(g.layout(), "Custom QSS override", self.custom_qss)
 

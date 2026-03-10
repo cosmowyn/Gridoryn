@@ -36,6 +36,7 @@ Gridoryn is not for:
 - Built-in perspectives: All, Today, Upcoming, Inbox, Someday, and Completed / Archive
 - Search, filters, saved views, and dense keyboard-first navigation
 - Custom columns with typed editors, including dates and editable lists
+- Theme customization includes a custom QSS override path, and the embedded guide now documents stable internal selectors and QSS examples for targeted UI restyling
 - Notes, tags, reminders, attachments, recurrence, effort, actual time, and waiting context
 
 ### Project management
@@ -68,6 +69,8 @@ Gridoryn is not for:
 ![Main workspace](docs/screenshots/main-workspace.png)
 
 The main workspace screenshot reflects the current task-tree rendering: task state is carried by a compact leading strip in the first visible cell, while the rest of the row stays neutral for readability and lower repaint cost.
+
+The embedded guide also now includes a dedicated QSS styling chapter with stable widget/object selectors, syntax examples, and practical starting points for customizing the UI without editing code.
 
 ### Project cockpit timeline
 

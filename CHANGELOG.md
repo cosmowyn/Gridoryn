@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog and uses straightforward dated entrie
 
 ## [Unreleased]
 
+### Added
+
+- A dedicated embedded help chapter for QSS styling, including stable internal widget selectors, syntax examples, and guidance on what can and cannot be styled through Qt stylesheets
+
 ## [2.0.0] - 2026-03-09
 
 ### Added

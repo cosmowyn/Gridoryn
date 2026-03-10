@@ -380,6 +380,150 @@ HELP_CHAPTERS: list[HelpChapter] = [
         """,
     ),
     HelpChapter(
+        anchor="qss-styling",
+        title="QSS Styling and Internal Selectors",
+        keywords=[
+            "qss",
+            "stylesheet",
+            "style sheet",
+            "custom qss",
+            "selectors",
+            "objectname",
+            "theme override",
+            "styling",
+            "customize ui",
+        ],
+        body_html="""
+        <p><strong>Settings &amp; Themes &gt; Advanced &gt; Custom QSS override</strong> appends your Qt StyleSheet after the generated theme stylesheet, so it is the right place for targeted visual overrides.</p>
+        <p><strong>Important limits</strong>:</p>
+        <ul>
+            <li><strong>QSS styles widgets, not raw actions</strong>. A <code>QAction</code> is not directly styleable. Style the widget that renders it instead, such as <code>QToolBar</code>, <code>QToolButton</code>, <code>QMenu</code>, or <code>QMenu::item</code>.</li>
+            <li><strong>Custom-painted surfaces are not fully QSS-driven</strong>. Gantt bars, the task-state strip in the main tree, calendar markers, and the radial time dial rely partly on theme/project data and custom paint code rather than pure stylesheet selectors.</li>
+            <li>If a selector seems to do nothing, first check whether the target is a real widget with a stable <code>objectName</code> or a custom-painted surface that should be customized through theme settings instead.</li>
+        </ul>
+        <p><strong>Selector syntax starting points</strong>:</p>
+        <ul>
+            <li><code>QPushButton</code>: by widget class</li>
+            <li><code>QPushButton#RowDeleteButton</code>: by class + object name</li>
+            <li><code>QDockWidget#ProjectCockpitDock::title</code>: dock title subcontrol</li>
+            <li><code>QToolBar#MainToolBar QToolButton</code>: descendant selector</li>
+            <li><code>QPushButton#PerspectiveNavButton:checked</code>: state selector</li>
+            <li><code>QMenu::item:selected</code>: menu item subcontrol + state</li>
+        </ul>
+        <p><strong>Examples</strong>:</p>
+        <pre><code>QPushButton#RowDeleteButton {
+    background: #5a1010;
+    color: white;
+    border: 1px solid #7d1b1b;
+}
+
+QDockWidget#ProjectCockpitDock::title {
+    background: #1f2937;
+    color: #f9fafb;
+    padding: 6px 8px;
+}
+
+QWidget#CaptureNavigationPanel QLineEdit#SearchBar {
+    border: 1px solid #2563eb;
+    border-radius: 6px;
+}
+
+QToolBar#MainToolBar QToolButton {
+    padding: 4px 8px;
+}
+
+QPushButton#PerspectiveNavButton:checked {
+    background: #2563eb;
+    color: white;
+}
+
+QPushButton#ContextHelpButton {
+    min-width: 22px;
+    max-width: 22px;
+    border-radius: 11px;
+}</code></pre>
+        <p><strong>Stable widget targets already exposed by the app</strong>:</p>
+        <table>
+            <tr><th>Selector</th><th>Use</th></tr>
+            <tr><td><code>QLineEdit#QuickAddBar</code></td><td>Main quick-add field</td></tr>
+            <tr><td><code>QLineEdit#SearchBar</code></td><td>Main search field</td></tr>
+            <tr><td><code>QPushButton#SearchClear</code></td><td>Search clear button</td></tr>
+            <tr><td><code>QPushButton#PerspectiveNavButton</code></td><td>Perspective buttons in the capture/navigation dock</td></tr>
+            <tr><td><code>QWidget#CaptureNavigationPanel</code></td><td>Inner panel that holds quick add, search, perspective, and sort controls</td></tr>
+            <tr><td><code>QScrollArea#CaptureNavigationScroll</code></td><td>Scrollable wrapper for the capture/navigation panel</td></tr>
+            <tr><td><code>QDockWidget#CaptureNavigationDock</code></td><td>Capture/navigation dock shell</td></tr>
+            <tr><td><code>QWidget#TaskTableContainer</code></td><td>Main task table container</td></tr>
+            <tr><td><code>QWidget#MainTreeHost</code></td><td>Host widget around the main task tree</td></tr>
+            <tr><td><code>QWidget#RowActionGutter</code></td><td>Left gutter that holds row add/delete buttons</td></tr>
+            <tr><td><code>QPushButton#RowAddChildButton</code></td><td>Inline add-child gutter button</td></tr>
+            <tr><td><code>QPushButton#RowDeleteButton</code></td><td>Inline archive/delete gutter button</td></tr>
+            <tr><td><code>QWidget#TaskTableFloatingPlaceholder</code></td><td>Central placeholder shown when the task table is floated</td></tr>
+            <tr><td><code>QWidget#FloatingTaskTableWindow</code></td><td>Detached floating task table window</td></tr>
+            <tr><td><code>QDockWidget#FiltersDock</code></td><td>Filters dock</td></tr>
+            <tr><td><code>QDockWidget#DetailsDock</code></td><td>Details dock</td></tr>
+            <tr><td><code>QDockWidget#ProjectCockpitDock</code></td><td>Project cockpit dock</td></tr>
+            <tr><td><code>QDockWidget#ProjectTutorialDock</code></td><td>Guided project tutorial dock</td></tr>
+            <tr><td><code>QDockWidget#RelationshipsDock</code></td><td>Relationship inspector dock</td></tr>
+            <tr><td><code>QDockWidget#FocusDock</code></td><td>Focus mode dock</td></tr>
+            <tr><td><code>QDockWidget#ReviewDock</code></td><td>Review workflow dock</td></tr>
+            <tr><td><code>QDockWidget#AnalyticsDock</code></td><td>Analytics dock</td></tr>
+            <tr><td><code>QDockWidget#CalendarDock</code></td><td>Calendar/agenda dock</td></tr>
+            <tr><td><code>QDockWidget#UndoHistoryDock</code></td><td>Undo history dock</td></tr>
+            <tr><td><code>QListView#UndoHistoryView</code></td><td>Undo history list view</td></tr>
+            <tr><td><code>QToolBar#MainToolBar</code></td><td>Main toolbar that renders toolbar actions</td></tr>
+            <tr><td><code>QLabel#AppVersionLabel</code></td><td>Status bar app version label</td></tr>
+            <tr><td><code>QLabel#ActiveTaskStatusLabel</code></td><td>Status bar active-task label</td></tr>
+            <tr><td><code>QLabel#WorkspaceStatusLabel</code></td><td>Status bar workspace label</td></tr>
+            <tr><td><code>QPushButton#ContextHelpButton</code></td><td>Small “?” help buttons used across panels and dialogs</td></tr>
+            <tr><td><code>QLabel#ContextHeaderTitle</code></td><td>Header label used beside contextual help buttons</td></tr>
+            <tr><td><code>QWidget#ProjectTutorialPanel</code></td><td>Docked guided tutorial panel</td></tr>
+            <tr><td><code>QWidget#GanttZoomPanel</code></td><td>Toolbar-like zoom/control cluster inside the Gantt</td></tr>
+            <tr><td><code>QHeaderView#GanttStructureHeader</code></td><td>Left-side structure header in the Gantt</td></tr>
+            <tr><td><code>QLabel#RelationshipsActiveTaskLabel</code></td><td>Relationship inspector active-task header</td></tr>
+            <tr><td><code>QLabel#RelationshipsMetaLabel</code></td><td>Relationship inspector metadata line</td></tr>
+            <tr><td><code>QWidget#RelationshipsGroup_depends_on</code></td><td>Relationship inspector section for predecessors</td></tr>
+            <tr><td><code>QWidget#RelationshipsGroup_dependents</code></td><td>Relationship inspector section for dependents</td></tr>
+            <tr><td><code>QWidget#RelationshipsGroup_children</code></td><td>Relationship inspector section for children</td></tr>
+            <tr><td><code>QWidget#RelationshipsGroup_siblings</code></td><td>Relationship inspector section for siblings</td></tr>
+            <tr><td><code>QWidget#RelationshipsGroup_same_project</code></td><td>Relationship inspector section for same-project tasks</td></tr>
+            <tr><td><code>QWidget#RelationshipsGroup_same_tags</code></td><td>Relationship inspector section for same-tag tasks</td></tr>
+            <tr><td><code>QWidget#RelationshipsGroup_same_waiting_for</code></td><td>Relationship inspector section for shared waiting context</td></tr>
+            <tr><td><code>QListWidget#RelationshipsList_depends_on</code></td><td>Predecessor task list</td></tr>
+            <tr><td><code>QListWidget#RelationshipsList_same_project</code></td><td>Same-project task list</td></tr>
+            <tr><td><code>QWidget#SectionPanel</code></td><td>Generic section container used across many docks and dialogs</td></tr>
+            <tr><td><code>QLabel#SectionTitleLabel</code></td><td>Section header title label</td></tr>
+            <tr><td><code>QLabel#SectionSubtitleLabel</code></td><td>Section subtitle label when shown</td></tr>
+            <tr><td><code>QWidget#SummaryCard</code></td><td>Compact summary-card container</td></tr>
+            <tr><td><code>QLabel#SummaryCardTitle</code></td><td>Summary-card title</td></tr>
+            <tr><td><code>QLabel#SummaryCardValue</code></td><td>Summary-card main value</td></tr>
+            <tr><td><code>QLabel#SummaryCardDetail</code></td><td>Summary-card detail line</td></tr>
+            <tr><td><code>QWidget#EmptyStatePanel</code></td><td>Generic empty-state container</td></tr>
+            <tr><td><code>QLabel#EmptyStateTitleLabel</code></td><td>Empty-state title</td></tr>
+            <tr><td><code>QLabel#EmptyStateMessageLabel</code></td><td>Empty-state explanatory text</td></tr>
+            <tr><td><code>QDialog#TimeDialDialog</code></td><td>Radial time-picker dialog</td></tr>
+            <tr><td><code>QWidget#RadialTimeDial</code></td><td>Clock dial widget inside the time picker</td></tr>
+            <tr><td><code>QLabel#TimeDialTimeLabel</code></td><td>Large selected-time label in the time picker</td></tr>
+            <tr><td><code>QLabel#TimeDialModeLabel</code></td><td>Hour/minute mode label in the time picker</td></tr>
+            <tr><td><code>QLabel#QuickCaptureStatus</code></td><td>Status line in the quick-capture dialog</td></tr>
+        </table>
+        <p><strong>Action styling starting points</strong>:</p>
+        <ul>
+            <li><strong>Toolbar actions</strong>: style <code>QToolBar#MainToolBar QToolButton</code>.</li>
+            <li><strong>Menu actions</strong>: style <code>QMenu</code> and <code>QMenu::item</code>.</li>
+            <li><strong>Dock title buttons and toolbar-like controls</strong>: style the containing dock, toolbar, or named button widget, not the <code>QAction</code> itself.</li>
+        </ul>
+        <p><strong>Good first overrides</strong>:</p>
+        <ul>
+            <li>accent the active perspective button</li>
+            <li>restyle dock title bars</li>
+            <li>tighten toolbar button padding</li>
+            <li>make contextual help buttons smaller or higher-contrast</li>
+            <li>differentiate summary cards and empty states more clearly</li>
+        </ul>
+        <p>For chart bars, reminder clocks, task-state strips, or calendar markers, prefer the existing <strong>theme settings</strong> and project-local color controls first. Those surfaces are partly custom-painted and will not respond fully to plain QSS selectors.</p>
+        """,
+    ),
+    HelpChapter(
         anchor="review",
         title="Review Workflow",
         keywords=[
@@ -909,6 +1053,11 @@ def _build_help_html() -> str:
         <style>
           body {{ font-family: {_help_body_font_css()}; line-height: 1.5; }}
           code {{ background: #f2f2f2; padding: 2px 4px; border-radius: 3px; }}
+          pre {{ background: #f7f7f7; padding: 8px 10px; border-radius: 6px; overflow-x: auto; }}
+          pre code {{ background: transparent; padding: 0; }}
+          table {{ border-collapse: collapse; width: 100%; margin: 12px 0; }}
+          th, td {{ border: 1px solid #d8d8d8; padding: 6px 8px; text-align: left; vertical-align: top; }}
+          th {{ background: #f4f4f4; }}
           h1, h2 {{ margin-bottom: 0.25em; }}
           hr {{ margin: 18px 0; }}
         </style>
