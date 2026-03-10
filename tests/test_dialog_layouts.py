@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QDoubleSpinBox,
     QHBoxLayout,
     QPushButton,
     QVBoxLayout,
@@ -95,3 +96,18 @@ def test_help_html_uses_runtime_app_font_not_apple_system_alias(qapp):
 
     assert "-apple-system" not in html
     assert "font-family:" in html
+
+
+def test_settings_dialog_border_width_controls_support_floats(qapp):
+    dialog = SettingsDialog(QSettings())
+
+    width_widget = dialog._border_widgets["headers"]["top"]["width"]
+    assert isinstance(width_widget, QDoubleSpinBox)
+
+    dialog._theme["borders"]["headers"]["top"]["width"] = 1.5
+    dialog._load_theme_into_controls()
+    assert width_widget.value() == 1.5
+
+    width_widget.setValue(2.25)
+    dialog._pull_controls_into_theme()
+    assert dialog._theme["borders"]["headers"]["top"]["width"] == 2.25

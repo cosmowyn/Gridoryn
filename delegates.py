@@ -389,7 +389,7 @@ class SmartDelegate(QStyledItemDelegate):
 
     def _draw_side(self, painter: QPainter, x1: int, y1: int, x2: int, y2: int, cfg: dict):
         enabled = bool(cfg.get("enabled", False))
-        width = int(cfg.get("width", 0))
+        width = float(cfg.get("width", 0))
         color = QColor(str(cfg.get("color", "#000000")))
         style = self._pen_style(str(cfg.get("style", "solid")))
 
@@ -397,7 +397,7 @@ class SmartDelegate(QStyledItemDelegate):
             return
 
         pen = QPen(color)
-        pen.setWidth(width)
+        pen.setWidthF(width)
         pen.setStyle(style)
         painter.setPen(pen)
         painter.drawLine(x1, y1, x2, y2)

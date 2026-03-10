@@ -6,7 +6,8 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QComboBox,
     QColorDialog, QFontDialog, QFileDialog, QLineEdit,
     QFormLayout, QPlainTextEdit, QMessageBox,
-    QInputDialog, QScrollArea, QWidget, QCheckBox, QSpinBox, QGridLayout, QSizePolicy
+    QInputDialog, QScrollArea, QWidget, QCheckBox, QSpinBox, QDoubleSpinBox,
+    QGridLayout, QSizePolicy
 )
 
 from theme import ThemeManager, default_theme_dict
@@ -546,8 +547,10 @@ class SettingsDialog(QDialog):
 
         for row_idx, side in enumerate(("top", "right", "bottom", "left"), start=1):
             enabled = QCheckBox()
-            width = QSpinBox()
-            width.setRange(0, 20)
+            width = QDoubleSpinBox()
+            width.setRange(0.0, 20.0)
+            width.setDecimals(2)
+            width.setSingleStep(0.25)
             width.setSuffix(" px")
             width.setMinimumWidth(90)
 
@@ -760,7 +763,7 @@ class SettingsDialog(QDialog):
                 cfg = self._theme["borders"][section][side]
                 w = self._border_widgets[section][side]
                 w["enabled"].setChecked(bool(cfg.get("enabled", False)))
-                w["width"].setValue(int(cfg.get("width", 0)))
+                w["width"].setValue(float(cfg.get("width", 0)))
                 style_cb = w["style"]
                 style = str(cfg.get("style", "solid"))
                 idx = style_cb.findText(style)
@@ -783,7 +786,7 @@ class SettingsDialog(QDialog):
                 w = self._border_widgets[section][side]
                 self._theme["borders"][section][side] = {
                     "enabled": bool(w["enabled"].isChecked()),
-                    "width": int(w["width"].value()),
+                    "width": float(w["width"].value()),
                     "style": str(w["style"].currentText()),
                     "color": str(w["color_btn"].text()),
                 }

@@ -67,10 +67,10 @@ def _ensure_contrast(bg_hex: str, fg_hex: str) -> str:
         return fg_hex
 
 
-def _default_border_side(enabled: bool, width: int, color: str, style: str) -> dict:
+def _default_border_side(enabled: bool, width: float, color: str, style: str) -> dict:
     return {
         "enabled": bool(enabled),
-        "width": int(width),
+        "width": float(width),
         "color": str(color),
         "style": str(style),
     }
@@ -366,13 +366,14 @@ class ThemeManager:
 
     def _css_border_side(self, side_cfg: dict) -> str:
         enabled = bool(side_cfg.get("enabled", False))
-        width = int(side_cfg.get("width", 0))
+        width = float(side_cfg.get("width", 0))
         color = str(side_cfg.get("color", "#000000"))
         style = str(side_cfg.get("style", "solid"))
 
         if not enabled or width <= 0:
             return "0px none transparent"
-        return f"{width}px {style} {color}"
+        width_text = f"{width:.2f}".rstrip("0").rstrip(".")
+        return f"{width_text}px {style} {color}"
 
     def _build_stylesheet(self, theme: dict) -> str:
         c = theme["colors"]
