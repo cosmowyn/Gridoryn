@@ -438,11 +438,17 @@ class SmartDelegate(QStyledItemDelegate):
             and index.column() == self._first_visible_logical_column()
             and not (opt.state & QStyle.StateFlag.State_Selected)
         ):
-            strip_rect = opt.rect.adjusted(0, 0, 0, 0)
-            strip_rect.setWidth(min(self.SEMANTIC_STRIP_WIDTH, strip_rect.width()))
-            if strip_rect.width() > 0 and strip_rect.height() > 0:
+            marker_size = min(
+                self.SEMANTIC_STRIP_WIDTH,
+                opt.rect.width(),
+                opt.rect.height(),
+            )
+            marker_rect = opt.rect.adjusted(0, 0, 0, 0)
+            marker_rect.setWidth(marker_size)
+            marker_rect.setHeight(marker_size)
+            if marker_rect.width() > 0 and marker_rect.height() > 0:
                 painter.save()
-                painter.fillRect(strip_rect, semantic_color)
+                painter.fillRect(marker_rect, semantic_color)
                 painter.restore()
 
         style = opt.widget.style() if opt.widget is not None else QApplication.style()

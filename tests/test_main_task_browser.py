@@ -225,13 +225,15 @@ def test_semantic_row_coloring_is_limited_to_first_visible_cell(
         desc_img = _paint_cell(idx_desc)
         due_img = _paint_cell(idx_due)
 
-        desc_strip = desc_img.pixelColor(2, 21)
+        desc_marker = desc_img.pixelColor(2, 2)
         desc_body = desc_img.pixelColor(60, 21)
-        due_strip = due_img.pixelColor(2, 21)
+        desc_lower = desc_img.pixelColor(2, 21)
+        due_marker = due_img.pixelColor(2, 2)
         due_body = due_img.pixelColor(60, 21)
 
-        assert desc_strip != desc_body
-        assert due_strip == due_body
+        assert desc_marker != desc_body
+        assert desc_lower == desc_body
+        assert due_marker == due_body
 
         header = window.view.header()
         header.moveSection(header.visualIndex(1), 0)
@@ -239,8 +241,9 @@ def test_semantic_row_coloring_is_limited_to_first_visible_cell(
         desc_img_reordered = _paint_cell(idx_desc)
         due_img_reordered = _paint_cell(idx_due)
 
-        assert desc_img_reordered.pixelColor(2, 21) == desc_img_reordered.pixelColor(60, 21)
-        assert due_img_reordered.pixelColor(2, 21) != due_img_reordered.pixelColor(60, 21)
+        assert desc_img_reordered.pixelColor(2, 2) == desc_img_reordered.pixelColor(60, 21)
+        assert due_img_reordered.pixelColor(2, 2) != due_img_reordered.pixelColor(60, 21)
+        assert due_img_reordered.pixelColor(2, 21) == due_img_reordered.pixelColor(60, 21)
     finally:
         window.close()
         qapp.processEvents()
