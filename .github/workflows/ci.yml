@@ -4,13 +4,19 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  syntax-and-ui-smoke:
+  syntax:
+    name: Syntax
     runs-on: ubuntu-latest
-    env:
-      QT_QPA_PLATFORM: offscreen
-      QT_OPENGL: software
-      LIBGL_ALWAYS_SOFTWARE: "1"
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -19,9 +25,177 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Environment diagnostics
+        run: |
+          echo "Start: $(date -u)"
+          echo "Runner: $RUNNER_OS"
+          echo "Python: $(python -VV)"
+          echo "Pip: $(python -m pip --version)"
+          echo "PWD: $(pwd)"
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Compile Python sources
+        run: |
+          set -euxo pipefail
+          python -m py_compile *.py tests/*.py
+
+  tests:
+    name: Tests (${{ matrix.suite.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs:
+      - syntax
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: core-a
+            timeout: 10m
+            files: >-
+              tests/test_auto_backup.py
+              tests/test_buildfile_release.py
+              tests/test_capture_parsing.py
+              tests/test_crash_logging.py
+              tests/test_db_core.py
+              tests/test_diagnostics_report.py
+              tests/test_platform_utils.py
+              tests/test_release_metadata.py
+              tests/test_saved_views.py
+              tests/test_template_params.py
+              tests/test_theme_icons.py
+              tests/test_workflow_assist.py
+              tests/test_workspace_profiles.py
+          - name: core-b
+            timeout: 12m
+            files: >-
+              tests/test_backup_theme_io.py
+              tests/test_category_folder_icons.py
+              tests/test_category_folders.py
+              tests/test_db_integrity.py
+              tests/test_db_migration.py
+              tests/test_demo_data.py
+              tests/test_filter_proxy.py
+              tests/test_focus_data.py
+              tests/test_model_core.py
+              tests/test_project_intelligence.py
+              tests/test_project_management.py
+              tests/test_relationships.py
+          - name: ui-a
+            timeout: 12m
+            files: >-
+              tests/test_context_help.py
+              tests/test_dialog_layouts.py
+              tests/test_help_ui.py
+              tests/test_interaction_utils.py
+              tests/test_runtime_warnings.py
+              tests/test_shortcuts.py
+          - name: ui-b
+            timeout: 15m
+            files: >-
+              tests/test_main_task_browser.py
+              tests/test_project_cockpit_ui.py
+              tests/test_project_tutorial.py
+              tests/test_selection_sync.py
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_OPENGL: software
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
 
       - name: Install Linux Qt runtime dependencies
         run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libopengl0 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0
+
+      - name: Environment diagnostics
+        run: |
+          echo "Start: $(date -u)"
+          echo "Suite: ${{ matrix.suite.name }}"
+          echo "Runner: $RUNNER_OS"
+          echo "Python: $(python -VV)"
+          echo "Pip: $(python -m pip --version)"
+          echo "PWD: $(pwd)"
+          python -m pip list | grep -E 'PySide6|pytest|PyInstaller' || true
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run pytest suite
+        run: |
+          set -euxo pipefail
+          echo "Pytest suite start: $(date -u)"
+          echo "Command: python -m pytest -ra --durations=20 -q ${{ matrix.suite.files }}"
+          status=0
+          timeout --signal=TERM --kill-after=30s ${{ matrix.suite.timeout }} \
+            python -m pytest -ra --durations=20 -q ${{ matrix.suite.files }} || status=$?
+          echo "Pytest suite end: $(date -u)"
+          if [ "$status" -eq 124 ]; then
+            echo "::error::Pytest timed out in suite '${{ matrix.suite.name }}' after ${{ matrix.suite.timeout }}."
+            exit 1
+          fi
+          exit "$status"
+
+  ui-smoke:
+    name: UI smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - syntax
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_OPENGL: software
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install Linux Qt runtime dependencies
+        run: |
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libegl1 \
@@ -32,18 +206,15 @@ jobs:
 
       - name: Install dependencies
         run: |
+          set -euxo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
-
-      - name: Compile Python sources
-        run: python -m py_compile *.py
-
-      - name: Run tests
-        run: python -m pytest -q
+          python -m pip install -r requirements-dev.txt
 
       - name: UI smoke import
         run: |
-          python - <<'PY'
+          set -euxo pipefail
+          echo "UI smoke start: $(date -u)"
+          timeout --signal=TERM --kill-after=15s 5m python - <<'PY'
           from PySide6.QtWidgets import QApplication
           from PySide6.QtCore import QSettings
           from settings_ui import SettingsDialog
@@ -56,3 +227,4 @@ jobs:
           FilterPanel(["Todo", "Done"])
           print("UI smoke ok")
           PY
+          echo "UI smoke end: $(date -u)"
