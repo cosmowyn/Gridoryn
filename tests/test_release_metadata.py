@@ -31,8 +31,8 @@ def test_release_docs_and_spec_match_product_name():
     assert readme.startswith("# Gridoryn")
     assert "<your-repo-url>" not in readme
     assert "https://github.com/cosmowyn/Gridoryn.git" in readme
-    assert "PyInstaller `.spec` files are treated as local/generated build artifacts" in readme
-    assert Path("Gridoryn.spec").exists() is False
+    assert "Gridoryn.spec" in readme
+    assert Path("Gridoryn.spec").exists()
 
 
 def test_release_checklist_uses_repo_relative_links():

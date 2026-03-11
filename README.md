@@ -194,8 +194,8 @@ The build helper:
 - if no `.ico` is present, the build helper will generate `build_assets/icons/Gridoryn.ico` from `icon.png` when possible
 - the build helper verifies `PyInstaller --version` in the current interpreter before building
 - the packaged app bundles `build_assets/icons` so the runtime window icon can match the executable icon
-- PyInstaller `.spec` files are treated as local/generated build artifacts and are not tracked in the stable repo
 - local/private signing material is intentionally excluded from the stable branch and release flow
+- the stable PyInstaller spec file is [Gridoryn.spec](Gridoryn.spec)
 
 ### Release checklist
 - [docs/release-checklist.md](docs/release-checklist.md)
@@ -242,6 +242,7 @@ crash_logging.py            Crash and operation logging
 demo_data.py                Showcase demo workspace generation
 workspace_profiles.py       Multi-workspace local profile handling
 buildfile.py                Local build helper
+Gridoryn.spec               Stable PyInstaller spec
 ```
 
 ## License

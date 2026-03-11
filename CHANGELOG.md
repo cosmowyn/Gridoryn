@@ -10,9 +10,6 @@ The format is inspired by Keep a Changelog and uses straightforward dated entrie
 - Windows build helper now prefers the active virtualenv interpreter, recognizes a repo-root `icon.ico`, and can generate a Windows `.ico` from `icon.png` so PyInstaller packaging and runtime window icons stay aligned
 - Windows build helper now verifies `PyInstaller` through the same interpreter that launched `buildfile.py`, uses absolute asset paths, and prints interpreter diagnostics before building
 
-### Changed
-- `Gridoryn.spec` is no longer tracked; PyInstaller spec files are treated as local generated artifacts and ignored in the stable repo
-
 ### Added
 
 - A dedicated embedded help chapter for QSS styling, including stable internal widget selectors, syntax examples, and guidance on what can and cannot be styled through Qt stylesheets
