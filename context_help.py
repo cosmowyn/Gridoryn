@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QWidget
 
 
@@ -68,12 +69,14 @@ def create_context_help_button(
     btn = QToolButton(host)
     btn.setObjectName("ContextHelpButton")
     btn.setText("?")
-    btn.setAutoRaise(True)
+    btn.setAutoRaise(False)
+    btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
     btn.setToolTip(str(tooltip or "Open help for this view"))
     btn.setStatusTip(btn.toolTip())
     btn.setAccessibleName(f"Help for {surface_id.replace('_', ' ')}")
     btn.setProperty("context_help_surface", str(surface_id))
     btn.setProperty("context_help_anchor", anchor)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
     btn.setFixedSize(24, 24)
     btn.clicked.connect(lambda: open_context_help(host, surface_id))
     return btn

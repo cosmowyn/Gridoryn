@@ -571,6 +571,22 @@ class ThemeManager:
             font-weight: 600;
         }}
         QToolButton#PerspectiveNavButton:checked:hover {{ background: {c["sel_bg"]}; }}
+
+        QToolButton#ContextHelpButton {{
+            background: {c["btn_bg"]};
+            color: {c["btn_fg"]};
+            border: 1px solid {c["btn_border"]};
+            border-radius: 12px;
+            padding: 0px;
+            min-width: 24px;
+            max-width: 24px;
+            min-height: 24px;
+            max-height: 24px;
+            {_font_css(button_font)}
+            font-weight: 700;
+        }}
+        QToolButton#ContextHelpButton:hover {{ background: {c["btn_hover_bg"]}; }}
+        QToolButton#ContextHelpButton:pressed {{ background: {c["btn_pressed_bg"]}; }}
         """
 
         custom = theme.get("custom_qss", "")
