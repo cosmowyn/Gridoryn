@@ -283,9 +283,35 @@ def test_semantic_row_coloring_honors_dot_and_bar_theme_settings(
             painter.end()
             return image
 
-        bar_img = _paint_cell(idx_desc)
-        assert bar_img.pixelColor(15, 2) != bar_img.pixelColor(60, 21)
-        assert bar_img.pixelColor(15, 20) == bar_img.pixelColor(60, 21)
+        fill_calls: list[tuple[int, int]] = []
+        ellipse_calls: list[tuple[int, int]] = []
+        original_fill_rect = QPainter.fillRect
+        original_draw_ellipse = QPainter.drawEllipse
+
+        def spy_fill_rect(self, rect, *args):
+            try:
+                fill_calls.append((int(rect.width()), int(rect.height())))
+            except Exception:
+                pass
+            return original_fill_rect(self, rect, *args)
+
+        def spy_draw_ellipse(self, *args):
+            if len(args) == 4:
+                ellipse_calls.append((int(args[2]), int(args[3])))
+            elif args:
+                try:
+                    rect = args[0]
+                    ellipse_calls.append((int(rect.width()), int(rect.height())))
+                except Exception:
+                    pass
+            return original_draw_ellipse(self, *args)
+
+        monkeypatch.setattr(QPainter, "fillRect", spy_fill_rect)
+        monkeypatch.setattr(QPainter, "drawEllipse", spy_draw_ellipse)
+
+        _paint_cell(idx_desc)
+        assert (20, 12) in fill_calls
+        assert not ellipse_calls
 
         theme["task_status_indicator"] = {
             "shape": "dot",
@@ -294,10 +320,11 @@ def test_semantic_row_coloring_honors_dot_and_bar_theme_settings(
         }
         theme_mgr.save_theme(theme_mgr.current_theme_name(), theme)
 
-        dot_img = _paint_cell(idx_desc)
-        assert dot_img.pixelColor(2, 2) != dot_img.pixelColor(60, 21)
-        assert dot_img.pixelColor(11, 2) == dot_img.pixelColor(60, 21)
-        assert dot_img.pixelColor(2, 20) == dot_img.pixelColor(60, 21)
+        fill_calls.clear()
+        ellipse_calls.clear()
+        _paint_cell(idx_desc)
+        assert not fill_calls
+        assert (12, 12) in ellipse_calls
     finally:
         window.close()
         qapp.processEvents()
@@ -320,21 +347,25 @@ def test_task_tree_context_menu_exposes_subtree_parent_context_actions(
         window._focus_task_by_id(phase_a)
         qapp.processEvents()
 
-        captured_actions: list[str] = []
+        menu = QMenu(window)
+        window._add_hierarchy_context_actions(menu, phase_a)
+        action_map = {action.text(): action for action in menu.actions()}
 
-        def fake_exec(self, *_args, **_kwargs):
-            captured_actions[:] = [action.text() for action in self.actions()]
-            return None
-
-        monkeypatch.setattr(QMenu, "exec", fake_exec)
-
-        index = window.view.currentIndex()
-        rect = window.view.visualRect(index)
-        window._open_context_menu(rect.center())
-
-        assert "Move subtree to previous parent" in captured_actions
-        assert "Move subtree to next parent" in captured_actions
-        assert "Make subtree independent" in captured_actions
+        assert "Move subtree to previous parent" in action_map
+        assert "Move subtree to next parent" in action_map
+        assert "Make subtree independent" in action_map
+        assert (
+            action_map["Move subtree to previous parent"].isEnabled()
+            == window.model.can_move_task_to_previous_parent_context(phase_a)
+        )
+        assert (
+            action_map["Move subtree to next parent"].isEnabled()
+            == window.model.can_move_task_to_next_parent_context(phase_a)
+        )
+        assert (
+            action_map["Make subtree independent"].isEnabled()
+            == window.model.can_make_task_independent(phase_a)
+        )
     finally:
         window.close()
         qapp.processEvents()
