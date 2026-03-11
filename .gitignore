@@ -47,10 +47,6 @@ htmlcov/
 
 # IDE/editor files
 .vscode/
-!.vscode/
-.vscode/*
-!.vscode/settings.json
-!.vscode/launch.json
 .idea/
 *.code-workspace
 
