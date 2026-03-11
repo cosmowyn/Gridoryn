@@ -30,6 +30,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QPolygonF,
+    QPainterPathStroker,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -772,6 +773,36 @@ class TimelineBarItem(QGraphicsItem):
             font.setWeight(QFont.Weight.DemiBold)
         return font
 
+    def _baseline_marker_x(self) -> float | None:
+        baseline = _ensure_date(str(self.row.get("baseline_date") or None))
+        if baseline is None or self.owner.range_start is None:
+            return None
+        return self.owner.date_to_scene_x(baseline)
+
+    def _baseline_marker_rect(self) -> QRectF:
+        baseline_x = self._baseline_marker_x()
+        if baseline_x is None:
+            return QRectF()
+        rect = self.base_rect()
+        return QRectF(
+            baseline_x - 2.0,
+            rect.top() - 4.0,
+            4.0,
+            rect.height() + 8.0,
+        )
+
+    def _baseline_marker_color(self) -> QColor:
+        color = self.owner.bar_border_for_row(self.row)
+        _debug_gantt_color(
+            "baseline-resolve",
+            uid=self.uid,
+            kind=str(self.row.get("kind") or ""),
+            item_id=int(self.row.get("item_id") or 0),
+            render_style=str(self.row.get("render_style") or ""),
+            marker_color=color.name(),
+        )
+        return color
+
     def _draw_external_label_chip(
         self,
         painter: QPainter,
@@ -811,9 +842,58 @@ class TimelineBarItem(QGraphicsItem):
         rect = self.base_rect()
         bounds = rect.adjusted(-8, -4, 8, 4)
         style = str(self.row.get("render_style") or "")
+        baseline_rect = self._baseline_marker_rect()
+        if not baseline_rect.isEmpty():
+            bounds = bounds.united(baseline_rect.adjusted(-2, 0, 2, 0))
         if style == "milestone":
             bounds = bounds.united(self._milestone_label_rect().adjusted(-2, -2, 2, 2))
         return bounds
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        rect = self.base_rect()
+        style = str(self.row.get("render_style") or "")
+        if style == "milestone":
+            center = rect.center()
+            radius = min(rect.height() * 0.55, 7.5)
+            diamond = QPolygonF(
+                [
+                    QPointF(center.x(), center.y() - radius),
+                    QPointF(center.x() + radius, center.y()),
+                    QPointF(center.x(), center.y() + radius),
+                    QPointF(center.x() - radius, center.y()),
+                ]
+            )
+            path.addPolygon(diamond)
+            label_rect = self._milestone_label_rect()
+            if not label_rect.isEmpty():
+                path.addRoundedRect(label_rect, 5.0, 5.0)
+        elif style == "summary":
+            summary_path = QPainterPath()
+            summary_path.moveTo(rect.left(), rect.center().y())
+            summary_path.lineTo(rect.left() + 10, rect.top())
+            summary_path.lineTo(rect.right() - 10, rect.top())
+            summary_path.lineTo(rect.right(), rect.center().y())
+            summary_path.lineTo(rect.right() - 10, rect.bottom())
+            summary_path.lineTo(rect.left() + 10, rect.bottom())
+            summary_path.closeSubpath()
+            path.addPath(summary_path)
+        else:
+            path.addRoundedRect(rect, 5.0, 5.0)
+
+        baseline_rect = self._baseline_marker_rect()
+        if not baseline_rect.isEmpty():
+            marker_path = QPainterPath()
+            marker_path.moveTo(
+                QPointF(baseline_rect.center().x(), baseline_rect.top())
+            )
+            marker_path.lineTo(
+                QPointF(baseline_rect.center().x(), baseline_rect.bottom())
+            )
+            stroker = QPainterPathStroker()
+            stroker.setWidth(max(4.0, baseline_rect.width() + 2.0))
+            path.addPath(stroker.createStroke(marker_path))
+        return path
 
     def anchor_start(self) -> QPointF:
         rect = self.base_rect()
@@ -957,10 +1037,8 @@ class TimelineBarItem(QGraphicsItem):
         text_color = self.owner.bar_text_color_for_row(row)
         style = str(row.get("render_style") or "task")
         is_selected = self.owner.selected_uid == self.uid
-        baseline = _ensure_date(str(row.get("baseline_date") or None))
-        baseline_x = None
-        if baseline is not None and self.owner.range_start is not None:
-            baseline_x = self.owner.date_to_scene_x(baseline)
+        baseline_x = self._baseline_marker_x()
+        baseline_color = self._baseline_marker_color() if baseline_x is not None else QColor()
 
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(QPen(border, 1.6 if style == "summary" and not is_selected else 1.4 if not is_selected else 2.2))
@@ -979,7 +1057,7 @@ class TimelineBarItem(QGraphicsItem):
             )
             painter.drawPolygon(diamond)
             if baseline_x is not None:
-                painter.setPen(QPen(QColor("#111827"), 2))
+                painter.setPen(QPen(baseline_color, 2))
                 painter.drawLine(
                     QPointF(baseline_x, rect.top() - 4),
                     QPointF(baseline_x, rect.bottom() + 4),
@@ -1025,7 +1103,7 @@ class TimelineBarItem(QGraphicsItem):
                 painter.setBrush(color)
 
         if baseline_x is not None and style != "milestone":
-            painter.setPen(QPen(QColor("#111827"), 2))
+            painter.setPen(QPen(baseline_color, 2))
             painter.drawLine(
                 QPointF(baseline_x, rect.top() - 4),
                 QPointF(baseline_x, rect.bottom() + 4),

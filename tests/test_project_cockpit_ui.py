@@ -502,6 +502,84 @@ def test_gantt_context_menu_supports_unassigned_phase_color_actions(qapp):
     assert reset == [("phase_unassigned", 1)]
 
 
+def test_gantt_context_menu_on_project_baseline_marker_uses_project_row(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+    widget.show()
+    qapp.processEvents()
+
+    project_row = widget.row_lookup["project:1"]
+    project_item = widget.bar_items["project:1"]
+    marker_rect = project_item._baseline_marker_rect()
+    assert not marker_rect.isEmpty()
+    assert marker_rect.center().x() < project_item.base_rect().right()
+
+    marker_pos = widget.view.mapFromScene(marker_rect.center())
+    menu = widget.build_context_menu(marker_pos)
+    labels = [action.text() for action in menu.actions()]
+
+    assert "Set item color…" in labels
+
+    changed: list[tuple[str, int, object]] = []
+    widget.itemColorChangeRequested.connect(
+        lambda kind, item_id, color: changed.append((str(kind), int(item_id), color))
+    )
+
+    with patch(
+        "gantt_ui.QColorDialog.getColor",
+        return_value=widget.bar_color_for_row(project_row).lighter(120),
+    ):
+        next(action for action in menu.actions() if action.text() == "Set item color…").trigger()
+
+    assert changed and changed[0][0:2] == ("project", 1)
+
+
+def test_baseline_marker_color_follows_row_override(qapp):
+    widget = ProjectGanttView()
+    widget.resize(1100, 480)
+    widget.set_dashboard(_sample_dashboard())
+    widget.show()
+    qapp.processEvents()
+
+    milestone_row = widget.row_lookup["milestone:5"]
+    project_row = widget.row_lookup["project:1"]
+
+    default_milestone_marker = (
+        widget.bar_items["milestone:5"]._baseline_marker_color().name().lower()
+    )
+    default_project_marker = (
+        widget.bar_items["project:1"]._baseline_marker_color().name().lower()
+    )
+
+    milestone_row["gantt_color_hex"] = "#118833"
+    project_row["gantt_color_hex"] = "#663399"
+
+    milestone_override = QColor("#118833")
+    milestone_expected = (
+        milestone_override.lighter(130)
+        if milestone_override.lightness() < 110
+        else milestone_override.darker(135)
+    )
+    project_override = QColor("#663399")
+    project_expected = (
+        project_override.lighter(130)
+        if project_override.lightness() < 110
+        else project_override.darker(135)
+    )
+
+    assert (
+        widget.bar_items["milestone:5"]._baseline_marker_color().name().lower()
+        == milestone_expected.name().lower()
+    )
+    assert (
+        widget.bar_items["project:1"]._baseline_marker_color().name().lower()
+        == project_expected.name().lower()
+    )
+    assert default_milestone_marker != milestone_expected.name().lower()
+    assert default_project_marker != project_expected.name().lower()
+
+
 def test_timeline_header_uses_separate_bands_and_keeps_today_badge_out_of_minor_row(qapp):
     header = TimelineHeaderWidget()
     header.resize(900, header.height())
