@@ -6,6 +6,9 @@ The format is inspired by Keep a Changelog and uses straightforward dated entrie
 
 ## [Unreleased]
 
+### Fixed
+- Windows build helper now prefers the active virtualenv interpreter, recognizes a repo-root `icon.ico`, and can generate a Windows `.ico` from `icon.png` so PyInstaller packaging and runtime window icons stay aligned
+
 ### Added
 
 - A dedicated embedded help chapter for QSS styling, including stable internal widget selectors, syntax examples, and guidance on what can and cannot be styled through Qt stylesheets

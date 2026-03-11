@@ -2,15 +2,41 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from copy import deepcopy
 
 from PySide6.QtGui import QFont, QIcon, QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
+from app_metadata import APP_NAME
 from app_paths import resource_path
 
 
 DEFAULT_THEME_NAME = "Light"
+
+
+def _bundled_icon_candidates() -> list[str]:
+    base_candidates = [
+        resource_path("build_assets", "icons", f"{APP_NAME}.png"),
+        resource_path("icon.png"),
+    ]
+    if os.name == "nt":
+        return [
+            resource_path("build_assets", "icons", f"{APP_NAME}.ico"),
+            resource_path("icon.ico"),
+            *base_candidates,
+        ]
+    if sys.platform == "darwin":
+        return [
+            resource_path("build_assets", "icons", f"{APP_NAME}.icns"),
+            *base_candidates,
+        ]
+    return [
+        resource_path("build_assets", "icons", f"{APP_NAME}.png"),
+        resource_path("build_assets", "icons", f"{APP_NAME}.ico"),
+        resource_path("icon.png"),
+        resource_path("icon.ico"),
+    ]
 
 
 def _font_to_str(font: QFont) -> str:
@@ -366,7 +392,10 @@ class ThemeManager:
         self.save_theme(new_name, t)
 
     def _bundled_default_icon_path(self) -> str:
-        return resource_path("resources", "app.png")
+        for candidate in _bundled_icon_candidates():
+            if os.path.isfile(candidate):
+                return candidate
+        return ""
 
     def icon_for_theme(self, theme: dict) -> QIcon | None:
         path = str(theme.get("app_icon_path") or "").strip()

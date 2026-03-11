@@ -30,6 +30,7 @@ from app_metadata import APP_NAME, APP_VERSION
 
 ENTRY_SCRIPT = "main.py"
 VENV_DIR = ".venv"
+PYTHON_ENV_VAR = "GRIDORYN_PYTHON"
 ICON_ENV_VAR = "GRIDORYN_ICON"
 SPLASH_ENV_VAR = "GRIDORYN_SPLASH"
 
@@ -60,16 +61,47 @@ def _venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
-def _ensure_venv_python() -> Path:
-    venv = Path(VENV_DIR).resolve()
-    py = _venv_python(venv)
+def _active_venv_python() -> Path | None:
+    exe = Path(sys.executable).resolve()
+    if not exe.exists():
+        return None
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        return exe
+    virtual_env = os.getenv("VIRTUAL_ENV", "").strip()
+    if virtual_env:
+        try:
+            venv_root = Path(virtual_env).resolve()
+            if exe.is_relative_to(venv_root):
+                return exe
+        except Exception:
+            pass
+    return None
 
-    if not py.exists():
-        raise FileNotFoundError(
-            f"Could not find virtualenv Python at:\n  {py}\n"
-            f"Make sure your venv exists at '{VENV_DIR}' (or edit VENV_DIR)."
-        )
-    return py
+
+def _resolve_build_python(project_root: Path) -> Path:
+    env_python = os.getenv(PYTHON_ENV_VAR, "").strip()
+    if env_python:
+        candidate = Path(env_python).expanduser().resolve()
+        if not candidate.exists():
+            raise FileNotFoundError(
+                f"{PYTHON_ENV_VAR} points to a missing Python executable:\n  {candidate}"
+            )
+        return candidate
+
+    active_python = _active_venv_python()
+    if active_python is not None:
+        return active_python
+
+    venv = (project_root / VENV_DIR).resolve()
+    py = _venv_python(venv)
+    if py.exists():
+        return py
+
+    raise FileNotFoundError(
+        f"Could not find virtualenv Python at:\n  {py}\n"
+        f"Activate your venv before running buildfile.py, set {PYTHON_ENV_VAR}, "
+        f"or ensure '{VENV_DIR}' exists in the project root."
+    )
 
 
 def _ensure_pyinstaller(venv_python: Path) -> None:
@@ -89,7 +121,10 @@ def _ensure_pyinstaller(venv_python: Path) -> None:
             text=True,
         )
     except Exception:
-        print("PyInstaller not importable in this venv. Installing pyinstaller...")
+        print(
+            "PyInstaller not importable in the selected build interpreter. "
+            f"Attempting install into:\n  {venv_python}"
+        )
         subprocess.run(
             [
                 str(venv_python),
@@ -157,8 +192,11 @@ def _stage_release_artifact(source_artifact: Path, dist_dir: Path) -> Path:
 def _validate_icon_path(icon_path: str) -> None:
     ext = Path(icon_path).suffix.lower()
     if _is_windows():
-        if ext != ".ico":
-            raise ValueError("On Windows, the icon must be a .ico file.")
+        if ext not in (".ico", ".png", ".jpg", ".jpeg", ".bmp"):
+            raise ValueError(
+                "On Windows, the icon must be .ico or a common image format "
+                "that can be converted to .ico."
+            )
     elif _is_macos():
         if ext not in (
             ".icns",
@@ -264,6 +302,35 @@ def _convert_image_to_icns_mac(
     return out_icns
 
 
+def _convert_image_to_ico_qt(
+    image_path: Path,
+    project_root: Path,
+    app_name: str,
+) -> Path:
+    try:
+        from PySide6.QtGui import QImage
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not import PySide6 to convert the Windows icon to .ico."
+        ) from exc
+
+    out_dir = project_root / "build_assets" / "icons"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_ico = out_dir / f"{app_name}.ico"
+
+    image = QImage(str(image_path))
+    if image.isNull():
+        raise RuntimeError(f"Could not load icon image for ICO conversion: {image_path}")
+
+    out_ico.unlink(missing_ok=True)
+    if not image.save(str(out_ico), "ICO") or not out_ico.exists():
+        raise RuntimeError(
+            f"ICO conversion failed for '{image_path}'. "
+            "Provide a valid .ico file or a readable source image."
+        )
+    return out_ico
+
+
 def _env_asset_path(var_name: str) -> Path | None:
     raw_value = os.getenv(var_name, "").strip()
     if not raw_value:
@@ -280,16 +347,24 @@ def _env_asset_path(var_name: str) -> Path | None:
 def _default_icon_candidates(project_root: Path) -> list[Path]:
     icons_dir = project_root / "build_assets" / "icons"
     if _is_windows():
-        return [icons_dir / f"{APP_NAME}.ico"]
+        return [
+            icons_dir / f"{APP_NAME}.ico",
+            project_root / "icon.ico",
+            icons_dir / f"{APP_NAME}.png",
+            project_root / "icon.png",
+        ]
     if _is_macos():
         return [
             icons_dir / f"{APP_NAME}.icns",
             icons_dir / f"{APP_NAME}.png",
+            project_root / "icon.png",
         ]
     return [
         icons_dir / f"{APP_NAME}.png",
         icons_dir / f"{APP_NAME}.ico",
         icons_dir / f"{APP_NAME}.icns",
+        project_root / "icon.png",
+        project_root / "icon.ico",
     ]
 
 
@@ -297,6 +372,8 @@ def _resolve_icon(project_root: Path) -> str | None:
     env_icon = _env_asset_path(ICON_ENV_VAR)
     if env_icon is not None:
         _validate_icon_path(str(env_icon))
+        if _is_windows() and env_icon.suffix.lower() != ".ico":
+            return str(_convert_image_to_ico_qt(env_icon, project_root, APP_NAME))
         if _is_macos() and env_icon.suffix.lower() != ".icns":
             return str(_convert_image_to_icns_mac(env_icon, project_root, APP_NAME))
         return str(env_icon)
@@ -305,6 +382,8 @@ def _resolve_icon(project_root: Path) -> str | None:
         if not candidate.exists():
             continue
         _validate_icon_path(str(candidate))
+        if _is_windows() and candidate.suffix.lower() != ".ico":
+            return str(_convert_image_to_ico_qt(candidate, project_root, APP_NAME))
         if _is_macos() and candidate.suffix.lower() != ".icns":
             return str(
                 _convert_image_to_icns_mac(candidate, project_root, APP_NAME)
@@ -368,6 +447,11 @@ def _pyinstaller_cmd(
         sep = ";" if _is_windows() else ":"
         cmd.extend(["--add-data", f"{resources_dir}{sep}resources"])
 
+    icons_dir = entry_script.parent / "build_assets" / "icons"
+    if icons_dir.exists() and icons_dir.is_dir():
+        sep = ";" if _is_windows() else ":"
+        cmd.extend(["--add-data", f"{icons_dir}{sep}build_assets/icons"])
+
     return cmd
 
 
@@ -380,7 +464,8 @@ def main() -> int:
 
     print(f"OS: {platform.system()}  |  Project: {project_root}")
 
-    venv_python = _ensure_venv_python()
+    venv_python = _resolve_build_python(project_root)
+    print(f"Using build Python: {venv_python}")
     _ensure_pyinstaller(venv_python)
 
     if _is_macos():

@@ -179,6 +179,7 @@ python buildfile.py
 
 The build helper:
 - reads the stable app name and version from [app_metadata.py](app_metadata.py)
+- uses the active virtualenv/interpreter when you run it from an activated venv
 - uses stable local icon/splash assets automatically when they are present
 - supports optional asset overrides through `GRIDORYN_ICON` and `GRIDORYN_SPLASH`
 - builds a PyInstaller desktop artifact
@@ -189,6 +190,9 @@ The build helper:
 - the stable repo includes a tracked macOS `.icns` icon asset
 - macOS icon conversion is handled through `sips` and `iconutil` when needed
 - Windows builds can supply a `.ico` through `GRIDORYN_ICON`
+- Windows builds also look for a repo-root `icon.ico`
+- if no `.ico` is present, the build helper will generate `build_assets/icons/Gridoryn.ico` from `icon.png` when possible
+- the packaged app bundles `build_assets/icons` so the runtime window icon can match the executable icon
 - local/private signing material is intentionally excluded from the stable branch and release flow
 - the stable PyInstaller spec file is [Gridoryn.spec](Gridoryn.spec)
 
