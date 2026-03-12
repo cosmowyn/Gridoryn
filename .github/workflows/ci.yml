@@ -101,9 +101,23 @@ jobs:
               tests/test_interaction_utils.py
               tests/test_runtime_warnings.py
               tests/test_shortcuts.py
-          - name: ui-b-main-task-browser
-            timeout: 8m
-            pytest_args: --maxfail=1
+          - name: ui-b-main-task-browser-core
+            timeout: 6m
+            pytest_args: >-
+              --maxfail=1 -k
+              "task_table_toggle_and_side_panel_browsing or refresh_views_after_db_close_does_not_crash or task_header_repairs_tiny_saved_section_widths or semantic_row_coloring or context_menu"
+            files: tests/test_main_task_browser.py
+          - name: ui-b-main-task-browser-columns
+            timeout: 6m
+            pytest_args: >-
+              --maxfail=1 -k
+              "custom_columns_expand_horizontal_scroll_range_without_manual_resize or restored_header_state_keeps_far_right_columns_reachable or restored_header_state_disables_stretch_last_section or columns_menu_lists_custom_columns or moved_header_state_keeps_rightmost_visible_column_reachable"
+            files: tests/test_main_task_browser.py
+          - name: ui-b-main-task-browser-startup
+            timeout: 6m
+            pytest_args: >-
+              --maxfail=1 -k
+              "showing_rightmost_column_while_scrolled_to_end_keeps_end_visible or startup_restore_shows_scrollbar_when_enabled_columns_exceed_viewport or stale_builtin_only_header_state_does_not_hide_custom_columns_at_startup or scroll_sync_repairs_oversized_scroll_range_without_manual_resize"
             files: tests/test_main_task_browser.py
           - name: ui-b-project-cockpit
             timeout: 8m
