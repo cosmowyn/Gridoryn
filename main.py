@@ -2338,53 +2338,165 @@ class MainWindow(QMainWindow):
             lines.append("Filters: " + " | ".join(filter_bits))
         return lines
 
-    def _build_current_task_list_report(self) -> TaskListReport:
-        project_name_cache: dict[int, str] = {}
-        folder_name_cache = {
+    def _task_report_folder_name_cache(self) -> dict[int, str]:
+        return {
             int(row.get("id") or 0): folder_display_name(row)
             for row in self.model.list_category_folders()
             if row.get("id") is not None
         }
-        rows: list[TaskListReportRow] = []
 
-        def project_name_for(task_id: int, task: dict) -> str:
-            project_id = self.model.project_id_for_task(int(task_id))
-            if project_id is None:
-                return ""
-            project_id = int(project_id)
-            cached = project_name_cache.get(project_id)
-            if cached is not None:
-                return cached
-            node = self.model.node_for_id(project_id)
-            name = str(node.task.get("description") or "") if node and node.task else str(task.get("description") or "")
-            project_name_cache[project_id] = name
-            return name
-
-        def category_name_for(task: dict, project_name: str) -> str:
-            folder_id = task.get("category_folder_id")
-            if folder_id is not None:
-                return str(folder_name_cache.get(int(folder_id), "") or "")
-            project_id = self.model.project_id_for_task(int(task.get("id") or 0))
-            if project_id is not None:
-                project_node = self.model.node_for_id(int(project_id))
-                if project_node and project_node.task:
-                    root_folder_id = project_node.task.get("category_folder_id")
-                    if root_folder_id is not None:
-                        return str(folder_name_cache.get(int(root_folder_id), "") or "")
+    def _task_report_project_name(
+        self,
+        task_id: int,
+        task: dict,
+        project_name_cache: dict[int, str],
+    ) -> str:
+        project_id = self.model.project_id_for_task(int(task_id))
+        if project_id is None:
             return ""
+        project_id = int(project_id)
+        cached = project_name_cache.get(project_id)
+        if cached is not None:
+            return cached
+        node = self.model.node_for_id(project_id)
+        name = (
+            str(node.task.get("description") or "")
+            if node and node.task
+            else str(task.get("description") or "")
+        )
+        project_name_cache[project_id] = name
+        return name
 
-        def blocked_waiting_for(task: dict) -> str:
-            status = str(task.get("status") or "")
-            bits: list[str] = []
-            dep_count = int(task.get("dependency_count") or task.get("blocked_by_count") or 0)
-            if dep_count > 0:
-                bits.append(f"{dep_count} dep")
-            waiting_for = str(task.get("waiting_for") or "").strip()
-            if waiting_for:
-                bits.append(f"Waiting: {waiting_for}")
-            if status == "Blocked" and not waiting_for:
-                bits.append("Blocked")
-            return " | ".join(bits)
+    def _task_report_category_name(
+        self,
+        task: dict,
+        folder_name_cache: dict[int, str],
+    ) -> str:
+        folder_id = task.get("category_folder_id")
+        if folder_id is not None:
+            return str(folder_name_cache.get(int(folder_id), "") or "")
+        project_id = self.model.project_id_for_task(int(task.get("id") or 0))
+        if project_id is not None:
+            project_node = self.model.node_for_id(int(project_id))
+            if project_node and project_node.task:
+                root_folder_id = project_node.task.get("category_folder_id")
+                if root_folder_id is not None:
+                    return str(folder_name_cache.get(int(root_folder_id), "") or "")
+        return ""
+
+    def _task_report_blocked_waiting(self, task: dict) -> str:
+        status = str(task.get("status") or "")
+        bits: list[str] = []
+        dep_count = int(task.get("dependency_count") or task.get("blocked_by_count") or 0)
+        if dep_count > 0:
+            bits.append(f"{dep_count} dep")
+        waiting_for = str(task.get("waiting_for") or "").strip()
+        if waiting_for:
+            bits.append(f"Waiting: {waiting_for}")
+        if status == "Blocked" and not waiting_for:
+            bits.append("Blocked")
+        return " | ".join(bits)
+
+    def _make_task_report_row(
+        self,
+        task: dict,
+        *,
+        depth: int = 0,
+        row_kind: str = "task",
+        selected: bool = False,
+        folder_name_cache: dict[int, str],
+        project_name_cache: dict[int, str],
+    ) -> TaskListReportRow:
+        task_id = int(task.get("id") or 0)
+        return TaskListReportRow(
+            task=str(task.get("description") or ""),
+            status=str(task.get("status") or ""),
+            due_date=str(task.get("due_date") or ""),
+            priority=str(task.get("priority") or ""),
+            project=self._task_report_project_name(task_id, task, project_name_cache),
+            category=self._task_report_category_name(task, folder_name_cache),
+            blocked_waiting=self._task_report_blocked_waiting(task),
+            row_kind=row_kind,
+            depth=max(0, int(depth)),
+            selected=bool(selected),
+        )
+
+    def _make_folder_report_row(
+        self,
+        folder: dict,
+        *,
+        depth: int = 0,
+        selected: bool = False,
+    ) -> TaskListReportRow:
+        return TaskListReportRow(
+            task=folder_display_name(folder),
+            status="Category",
+            due_date="",
+            priority="",
+            project="",
+            category=str(folder.get("path") or ""),
+            blocked_waiting="",
+            row_kind="folder",
+            depth=max(0, int(depth)),
+            selected=bool(selected),
+        )
+
+    def _selected_source_index(self) -> QModelIndex:
+        idx = self.view.currentIndex()
+        if not idx.isValid():
+            return QModelIndex()
+        return self.proxy.mapToSource(idx)
+
+    def _append_report_subtree_rows(
+        self,
+        node,
+        rows: list[TaskListReportRow],
+        *,
+        depth: int,
+        folder_name_cache: dict[int, str],
+        project_name_cache: dict[int, str],
+        selected_task_id: int | None = None,
+        selected_folder_id: int | None = None,
+    ) -> None:
+        if node is None:
+            return
+        if getattr(node, "folder", None):
+            folder = dict(node.folder)
+            rows.append(
+                self._make_folder_report_row(
+                    folder,
+                    depth=depth,
+                    selected=selected_folder_id is not None
+                    and int(folder.get("id") or 0) == int(selected_folder_id),
+                )
+            )
+        elif getattr(node, "task", None):
+            task = dict(node.task)
+            rows.append(
+                self._make_task_report_row(
+                    task,
+                    depth=depth,
+                    selected=selected_task_id is not None
+                    and int(task.get("id") or 0) == int(selected_task_id),
+                    folder_name_cache=folder_name_cache,
+                    project_name_cache=project_name_cache,
+                )
+            )
+        for child in list(getattr(node, "children", []) or []):
+            self._append_report_subtree_rows(
+                child,
+                rows,
+                depth=depth + 1,
+                folder_name_cache=folder_name_cache,
+                project_name_cache=project_name_cache,
+                selected_task_id=selected_task_id,
+                selected_folder_id=selected_folder_id,
+            )
+
+    def _build_current_task_list_report(self) -> TaskListReport:
+        project_name_cache: dict[int, str] = {}
+        folder_name_cache = self._task_report_folder_name_cache()
+        rows: list[TaskListReportRow] = []
 
         def walk(parent_proxy: QModelIndex = QModelIndex(), depth: int = 0):
             row_count = self.proxy.rowCount(parent_proxy)
@@ -2400,17 +2512,12 @@ class MainWindow(QMainWindow):
                 is_task = bool(getattr(node, "task", None))
                 if is_task:
                     task = dict(node.task)
-                    task_id = int(task.get("id") or 0)
-                    project_name = project_name_for(task_id, task)
                     rows.append(
-                        TaskListReportRow(
-                            task=("  " * max(0, depth)) + str(task.get("description") or ""),
-                            status=str(task.get("status") or ""),
-                            due_date=str(task.get("due_date") or ""),
-                            priority=str(task.get("priority") or ""),
-                            project=project_name,
-                            category=category_name_for(task, project_name),
-                            blocked_waiting=blocked_waiting_for(task),
+                        self._make_task_report_row(
+                            task,
+                            depth=0,
+                            folder_name_cache=folder_name_cache,
+                            project_name_cache=project_name_cache,
                         )
                     )
                 if is_folder:
@@ -2430,6 +2537,170 @@ class MainWindow(QMainWindow):
         return TaskListReport(
             title=title,
             subtitle_lines=self._task_list_context_lines(),
+            rows=rows,
+            exported_at=timestamp_string(),
+        )
+
+    def _build_current_hierarchical_task_list_report(self) -> TaskListReport:
+        project_name_cache: dict[int, str] = {}
+        folder_name_cache = self._task_report_folder_name_cache()
+        rows: list[TaskListReportRow] = []
+        selected_source = self._selected_source_index()
+        selected_task_id = self.model.task_id_from_index(selected_source)
+        selected_folder_id = self.model.folder_id_from_index(selected_source)
+
+        def walk(parent_proxy: QModelIndex = QModelIndex(), depth: int = 0):
+            row_count = self.proxy.rowCount(parent_proxy)
+            for row_idx in range(row_count):
+                proxy_index = self.proxy.index(row_idx, 0, parent_proxy)
+                if not proxy_index.isValid():
+                    continue
+                source_index = self.proxy.mapToSource(proxy_index)
+                if not source_index.isValid():
+                    continue
+                node = source_index.internalPointer()
+                if getattr(node, "folder", None):
+                    rows.append(
+                        self._make_folder_report_row(
+                            dict(node.folder),
+                            depth=depth,
+                            selected=selected_folder_id is not None
+                            and int(node.folder.get("id") or 0) == int(selected_folder_id),
+                        )
+                    )
+                elif getattr(node, "task", None):
+                    rows.append(
+                        self._make_task_report_row(
+                            dict(node.task),
+                            depth=depth,
+                            selected=selected_task_id is not None
+                            and int(node.task.get("id") or 0) == int(selected_task_id),
+                            folder_name_cache=folder_name_cache,
+                            project_name_cache=project_name_cache,
+                        )
+                    )
+                if self.view.isExpanded(proxy_index):
+                    walk(proxy_index, depth + 1)
+
+        walk()
+        perspective = str(self.view_mode.currentText() or "All")
+        title = (
+            "Current hierarchical task list"
+            if perspective.lower() == "all"
+            else f"{perspective} hierarchical task list"
+        )
+        subtitle_lines = self._task_list_context_lines() + [
+            "Hierarchy: follows the currently visible task tree expansion state."
+        ]
+        return TaskListReport(
+            title=title,
+            subtitle_lines=subtitle_lines,
+            rows=rows,
+            exported_at=timestamp_string(),
+        )
+
+    def _build_selected_scope_task_list_report(self) -> TaskListReport | None:
+        source_index = self._selected_source_index()
+        if not source_index.isValid():
+            return None
+        node = source_index.internalPointer()
+        if node is None:
+            return None
+
+        project_name_cache: dict[int, str] = {}
+        folder_name_cache = self._task_report_folder_name_cache()
+        rows: list[TaskListReportRow] = []
+        selected_task_id = self.model.task_id_from_index(source_index)
+        selected_folder_id = self.model.folder_id_from_index(source_index)
+        subtitle_lines: list[str] = []
+
+        if getattr(node, "folder", None):
+            folder = dict(node.folder)
+            self._append_report_subtree_rows(
+                node,
+                rows,
+                depth=0,
+                folder_name_cache=folder_name_cache,
+                project_name_cache=project_name_cache,
+                selected_task_id=selected_task_id,
+                selected_folder_id=selected_folder_id,
+            )
+            title = f"Category task report: {folder_display_name(folder)}"
+            subtitle_lines = [
+                "Scope: Selected category subtree",
+                f"Category path: {str(folder.get('path') or folder_display_name(folder))}",
+            ]
+        elif getattr(node, "task", None):
+            task = dict(node.task)
+            if list(getattr(node, "children", []) or []):
+                container = getattr(node, "parent", None)
+                depth_offset = 0
+                if container is not None and getattr(container, "folder", None):
+                    rows.append(
+                        self._make_folder_report_row(
+                            dict(container.folder),
+                            depth=0,
+                        )
+                    )
+                    depth_offset = 1
+                    subtitle_lines.append(
+                        f"Context: Sibling group inside category {folder_display_name(container.folder)}"
+                    )
+                elif container is not None and getattr(container, "task", None):
+                    rows.append(
+                        self._make_task_report_row(
+                            dict(container.task),
+                            depth=0,
+                            folder_name_cache=folder_name_cache,
+                            project_name_cache=project_name_cache,
+                        )
+                    )
+                    depth_offset = 1
+                    subtitle_lines.append(
+                        f"Context: Sibling group under parent {str(container.task.get('description') or '')}"
+                    )
+                for sibling in list(getattr(container, "children", []) or []) if container is not None else []:
+                    if not getattr(sibling, "task", None):
+                        continue
+                    self._append_report_subtree_rows(
+                        sibling,
+                        rows,
+                        depth=depth_offset,
+                        folder_name_cache=folder_name_cache,
+                        project_name_cache=project_name_cache,
+                        selected_task_id=selected_task_id,
+                        selected_folder_id=selected_folder_id,
+                    )
+                if not rows:
+                    self._append_report_subtree_rows(
+                        node,
+                        rows,
+                        depth=0,
+                        folder_name_cache=folder_name_cache,
+                        project_name_cache=project_name_cache,
+                        selected_task_id=selected_task_id,
+                        selected_folder_id=selected_folder_id,
+                    )
+                title = f"Parent task scope report: {str(task.get('description') or '')}"
+                subtitle_lines.insert(0, "Scope: Selected parent task with sibling context")
+            else:
+                rows.append(
+                    self._make_task_report_row(
+                        task,
+                        depth=0,
+                        selected=True,
+                        folder_name_cache=folder_name_cache,
+                        project_name_cache=project_name_cache,
+                    )
+                )
+                title = f"Task report: {str(task.get('description') or '')}"
+                subtitle_lines = ["Scope: Selected task only"]
+        else:
+            return None
+
+        return TaskListReport(
+            title=title,
+            subtitle_lines=subtitle_lines,
             rows=rows,
             exported_at=timestamp_string(),
         )
@@ -2689,9 +2960,47 @@ class MainWindow(QMainWindow):
 
     def _export_current_task_list_report(self):
         report = self._build_current_task_list_report()
-        perspective = sanitize_filename(str(self.view_mode.currentText() or "task-list"), "task-list")
+        self._export_task_list_report_dialog(
+            report,
+            default_slug=sanitize_filename(
+                str(self.view_mode.currentText() or "task-list"),
+                "task-list",
+            ),
+        )
+
+    def _export_current_hierarchical_task_list_report(self):
+        report = self._build_current_hierarchical_task_list_report()
+        self._export_task_list_report_dialog(
+            report,
+            default_slug=sanitize_filename(
+                f"{str(self.view_mode.currentText() or 'task-tree')}-hierarchy",
+                "task-tree-hierarchy",
+            ),
+        )
+
+    def _export_selected_scope_task_list_report(self):
+        report = self._build_selected_scope_task_list_report()
+        if report is None:
+            QMessageBox.information(
+                self,
+                "No selection",
+                "Select a category folder or task in the main task tree first.",
+            )
+            return
+        self._export_task_list_report_dialog(
+            report,
+            default_slug=sanitize_filename(report.title, "selection-report"),
+        )
+
+    def _export_task_list_report_dialog(
+        self,
+        report: TaskListReport,
+        *,
+        default_slug: str,
+    ) -> None:
         dlg = TaskListReportDialog(
-            default_path=str(Path.home() / f"{perspective}-tasks.pdf"),
+            default_path=str(Path.home() / f"{default_slug}.pdf"),
+            title=report.title,
             parent=self,
         )
         if dlg.exec() != dlg.DialogCode.Accepted:
@@ -4030,6 +4339,20 @@ class MainWindow(QMainWindow):
                 self._export_current_task_list_report,
             ),
             PaletteCommand(
+                "reports.task_list_hierarchy",
+                "Export hierarchical task list",
+                "Print or export the current task tree with visible hierarchy and category rows",
+                ("report", "print", "pdf", "tasks", "hierarchy", "tree"),
+                self._export_current_hierarchical_task_list_report,
+            ),
+            PaletteCommand(
+                "reports.task_list_selection",
+                "Export selected scope task list",
+                "Print or export the selected category or task scope from the task tree",
+                ("report", "print", "pdf", "tasks", "selection", "scope"),
+                self._export_selected_scope_task_list_report,
+            ),
+            PaletteCommand(
                 "reports.project_summary",
                 "Export project summary",
                 "Generate a one-page project summary sheet for the current project",
@@ -5164,6 +5487,19 @@ class MainWindow(QMainWindow):
         export_task_list_act = QAction("Current task list report…", self)
         export_task_list_act.triggered.connect(self._export_current_task_list_report)
 
+        export_task_tree_act = QAction("Current hierarchical task list…", self)
+        export_task_tree_act.triggered.connect(
+            self._export_current_hierarchical_task_list_report
+        )
+
+        export_selection_task_list_act = QAction(
+            "Selected scope task list…",
+            self,
+        )
+        export_selection_task_list_act.triggered.connect(
+            self._export_selected_scope_task_list_report
+        )
+
         export_project_summary_act = QAction("Export project summary sheet…", self)
         export_project_summary_act.triggered.connect(self._export_project_summary_sheet)
 
@@ -5242,6 +5578,8 @@ class MainWindow(QMainWindow):
         m_reports = m_file.addMenu("Reports")
         m_reports.addAction(export_timeline_pdf_act)
         m_reports.addAction(export_task_list_act)
+        m_reports.addAction(export_task_tree_act)
+        m_reports.addAction(export_selection_task_list_act)
         m_reports.addAction(export_project_summary_act)
 
         m_file.addSeparator()
@@ -5330,6 +5668,8 @@ class MainWindow(QMainWindow):
         m_tools.addSeparator()
         m_tools.addAction(export_timeline_pdf_act)
         m_tools.addAction(export_task_list_act)
+        m_tools.addAction(export_task_tree_act)
+        m_tools.addAction(export_selection_task_list_act)
         m_tools.addAction(export_project_summary_act)
         m_tools.addSeparator()
         m_tools.addAction(workspace_profiles_act)

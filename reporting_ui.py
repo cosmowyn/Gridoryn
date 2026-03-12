@@ -141,9 +141,9 @@ class TimelineExportDialog(_BasePdfDialog):
 
 
 class TaskListReportDialog(_BasePdfDialog):
-    def __init__(self, *, default_path: str, parent=None):
+    def __init__(self, *, default_path: str, title: str = "Current task list report", parent=None):
         super().__init__(
-            title="Current task list report",
+            title=title,
             default_path=default_path,
             default_orientation="landscape",
             parent=parent,

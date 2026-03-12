@@ -10,6 +10,7 @@ from main import MainWindow
 from reporting import (
     TimelinePdfExportOptions,
     build_timeline_pdf_payload,
+    build_task_list_report_html,
     create_custom_pdf_writer,
     _timeline_page_metrics,
     render_timeline_to_pdf,
@@ -58,6 +59,153 @@ def test_task_list_report_uses_current_proxy_context(tmp_path, qapp, monkeypatch
         assert report.rows[0].task.strip() == "Alpha current task"
         assert report.rows[0].priority == "1"
         assert any("Search: Alpha" in line for line in report.subtitle_lines)
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_hierarchical_task_list_report_preserves_visible_tree_structure(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        folder_id = window.model.create_category_folder("Operations")
+        assert window.model.add_task_with_values(
+            "Renew contract",
+            category_folder_id=folder_id,
+        )
+        parent_id = int(window.model.last_added_task_id())
+        assert window.model.add_task_with_values("Collect quotes", parent_id=parent_id)
+        child_id = int(window.model.last_added_task_id())
+        qapp.processEvents()
+
+        folder_node = window.model.folder_node_for_id(folder_id)
+        folder_src = window.model._index_for_node(folder_node, 0)
+        folder_proxy = window.proxy.mapFromSource(folder_src)
+        parent_src = window.model._index_for_node(window.model.node_for_id(parent_id), 0)
+        parent_proxy = window.proxy.mapFromSource(parent_src)
+        window.view.expand(folder_proxy)
+        window.view.expand(parent_proxy)
+        qapp.processEvents()
+
+        report = window._build_current_hierarchical_task_list_report()
+        labels = [row.task for row in report.rows]
+
+        assert "Operations" in labels
+        assert "Renew contract" in labels
+        assert "Collect quotes" in labels
+
+        folder_row = next(row for row in report.rows if row.task == "Operations")
+        parent_row = next(row for row in report.rows if row.task == "Renew contract")
+        child_row = next(row for row in report.rows if row.task == "Collect quotes")
+
+        assert folder_row.row_kind == "folder"
+        assert folder_row.depth == 0
+        assert parent_row.depth == 1
+        assert child_row.depth == 2
+
+        html = build_task_list_report_html(report)
+        assert "folder-row" in html
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_selected_scope_task_report_for_category_includes_folder_subtree(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        root_folder_id = window.model.create_category_folder("Operations")
+        sub_folder_id = window.model.create_category_folder(
+            "Internal",
+            parent_folder_id=root_folder_id,
+        )
+        assert window.model.add_task_with_values(
+            "Ops checklist",
+            category_folder_id=root_folder_id,
+        )
+        assert window.model.add_task_with_values(
+            "Internal rollout",
+            category_folder_id=sub_folder_id,
+        )
+        assert window.model.add_task_with_values("Loose task")
+        qapp.processEvents()
+
+        folder_node = window.model.folder_node_for_id(root_folder_id)
+        src_index = window.model._index_for_node(folder_node, 0)
+        proxy_index = window.proxy.mapFromSource(src_index)
+        window.view.setCurrentIndex(proxy_index)
+        qapp.processEvents()
+
+        report = window._build_selected_scope_task_list_report()
+        assert report is not None
+        labels = [row.task for row in report.rows]
+        assert labels[0] == "Operations"
+        assert "Internal" in labels
+        assert "Ops checklist" in labels
+        assert "Internal rollout" in labels
+        assert "Loose task" not in labels
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_selected_scope_task_report_for_parent_includes_siblings_and_children(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        assert window.model.add_task_with_values("Parent A")
+        parent_a = int(window.model.last_added_task_id())
+        assert window.model.add_task_with_values("Child A1", parent_id=parent_a)
+        assert window.model.add_task_with_values("Parent B")
+        parent_b = int(window.model.last_added_task_id())
+        qapp.processEvents()
+
+        window._focus_task_by_id(parent_a)
+        qapp.processEvents()
+
+        report = window._build_selected_scope_task_list_report()
+        assert report is not None
+        labels = [row.task for row in report.rows]
+        assert "Parent A" in labels
+        assert "Child A1" in labels
+        assert "Parent B" in labels
+        assert "Scope: Selected parent task with sibling context" in report.subtitle_lines
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
+def test_selected_scope_task_report_for_leaf_includes_only_selected_task(
+    tmp_path,
+    qapp,
+    monkeypatch,
+):
+    window = _build_window(tmp_path, qapp, monkeypatch)
+    try:
+        assert window.model.add_task_with_values("Parent A")
+        parent_a = int(window.model.last_added_task_id())
+        assert window.model.add_task_with_values("Leaf task", parent_id=parent_a)
+        leaf_id = int(window.model.last_added_task_id())
+        assert window.model.add_task_with_values("Sibling leaf", parent_id=parent_a)
+        qapp.processEvents()
+
+        window._focus_task_by_id(leaf_id)
+        qapp.processEvents()
+
+        report = window._build_selected_scope_task_list_report()
+        assert report is not None
+        labels = [row.task for row in report.rows]
+        assert labels == ["Leaf task"]
+        assert report.subtitle_lines == ["Scope: Selected task only"]
     finally:
         window.close()
         qapp.processEvents()

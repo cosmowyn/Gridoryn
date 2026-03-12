@@ -172,9 +172,11 @@ The demo uses fictionalized data only.
 Gridoryn includes a local-first reporting layer for the current working context:
 - export the current Project cockpit timeline to PDF
 - print or export the current filtered task list
+- print the current task tree with visible hierarchy and category rows
+- print a report scoped to the selected category or task context
 - generate a one-page project summary sheet
 
-These reports are context-aware rather than raw database dumps. Timeline export uses the current project cockpit selection, task-list reporting follows the active perspective/search/filter state, and the summary sheet uses the same project dashboard signals shown in the cockpit.
+These reports are context-aware rather than raw database dumps. Timeline export uses the current project cockpit selection, task-list reporting follows the active perspective/search/filter state, the hierarchical task-list report mirrors the visible task tree structure, the selection-scoped report follows the current category/task selection, and the summary sheet uses the same project dashboard signals shown in the cockpit.
 
 ## Build and Packaging
 

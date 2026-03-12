@@ -760,6 +760,8 @@ QPushButton#ContextHelpButton {
             <li><strong>Export current timeline to PDF</strong> uses the currently selected project context from the Project cockpit and exports the hierarchy tree plus the Gantt chart together.</li>
             <li>The timeline export includes a compact header with the project title, visible date range, export date, and the current scope/dependency options.</li>
             <li><strong>Current task list report</strong> uses the active tree context exactly as you see it: current perspective, search text, and filters. It can either print directly or export a PDF table.</li>
+            <li><strong>Current hierarchical task list</strong> prints the current task tree with visible category rows and the same parent/child indentation you see in the main tree.</li>
+            <li><strong>Selected scope task list</strong> prints a focused report from the current tree selection: a full category subtree, a parent task with sibling context, or a single selected task.</li>
             <li><strong>Export project summary sheet</strong> creates a one-page status sheet for the current project with charter facts, health, blockers, milestone status, and delivery highlights.</li>
             <li>The Project cockpit also exposes <strong>Export timeline PDF</strong> and <strong>Summary sheet</strong> buttons directly in the cockpit header so you do not have to leave the planning surface.</li>
             <li>Reports are generated locally and do not mutate the current project, task tree, or filter state.</li>

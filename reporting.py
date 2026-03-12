@@ -57,6 +57,9 @@ class TaskListReportRow:
     project: str = ""
     category: str = ""
     blocked_waiting: str = ""
+    row_kind: str = "task"
+    depth: int = 0
+    selected: bool = False
 
 
 @dataclass(slots=True)
@@ -333,10 +336,28 @@ def _css() -> str:
     table.report { width: 100%; border-collapse: collapse; margin-top: 10px; }
     table.report th, table.report td { border: 1px solid #d1d5db; padding: 5px 7px; text-align: left; vertical-align: top; }
     table.report th { background: #f3f4f6; font-weight: bold; }
+    table.report tbody tr.folder-row td { background: #eef2ff; font-weight: 700; color: #1f2937; }
+    table.report tbody tr.folder-row td:not(:first-child) { color: #6b7280; }
+    table.report tbody tr.selected-row td { background: #eff6ff; }
+    .task-cell { white-space: nowrap; }
+    .task-indent { display: inline-block; }
+    .folder-marker { color: #4338ca; margin-right: 6px; }
     ul.compact { margin: 6px 0 0 18px; padding: 0; }
     ul.compact li { margin: 0 0 4px 0; }
     .footer { color: #6b7280; font-size: 8.5pt; margin-top: 18px; }
     """
+
+
+def _task_cell_html(row: TaskListReportRow) -> str:
+    indent_px = max(0, int(row.depth)) * 18
+    text = escape(str(row.task or ""))
+    marker = ""
+    if str(row.row_kind or "task") == "folder":
+        marker = "<span class='folder-marker'>▸</span>"
+    return (
+        f"<span class='task-indent' style='margin-left: {indent_px}px;'>"
+        f"{marker}{text}</span>"
+    )
 
 
 def build_task_list_report_html(report: TaskListReport) -> str:
@@ -344,11 +365,19 @@ def build_task_list_report_html(report: TaskListReport) -> str:
     for row in report.rows:
         cell_values = []
         for _label, key in report.columns:
-            value = escape(str(getattr(row, key, "") or ""))
             if key == "task":
-                value = value.replace("  ", "&nbsp;&nbsp;")
+                value = _task_cell_html(row)
+                cell_values.append(f"<td class='task-cell'>{value}</td>")
+                continue
+            value = escape(str(getattr(row, key, "") or ""))
             cell_values.append(f"<td>{value}</td>")
-        rows_html.append(f"<tr>{''.join(cell_values)}</tr>")
+        row_classes: list[str] = []
+        if str(row.row_kind or "task") == "folder":
+            row_classes.append("folder-row")
+        if bool(row.selected):
+            row_classes.append("selected-row")
+        class_attr = f" class='{' '.join(row_classes)}'" if row_classes else ""
+        rows_html.append(f"<tr{class_attr}>{''.join(cell_values)}</tr>")
     header_html = "".join(f"<th>{escape(label)}</th>" for label, _key in report.columns)
     subtitles = "".join(f"<div class='subtitle'>{escape(line)}</div>" for line in report.subtitle_lines)
     if not rows_html:
