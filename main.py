@@ -1,5 +1,6 @@
 import hashlib
 import sys
+import time
 from copy import deepcopy
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -11,7 +12,7 @@ try:
 except Exception:
     pass
 
-from PySide6.QtCore import Qt, QTimer, QModelIndex, QEvent, QDateTime, QUrl, Signal, QPersistentModelIndex
+from PySide6.QtCore import Qt, QTimer, QModelIndex, QEvent, QDateTime, QUrl, Signal, QPersistentModelIndex, QLockFile
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QDesktopServices
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
@@ -25,7 +26,9 @@ from PySide6.QtWidgets import (
 
 from app_paths import app_db_path, app_data_dir
 from app_metadata import (
+    APP_LOG_SLUG,
     APP_NAME,
+    APP_UID,
     APP_STORAGE_NAME,
     APP_STORAGE_ORGANIZATION,
     APP_VERSION,
@@ -129,7 +132,8 @@ from ui_perf import measure_ui
 
 
 _UNSET = object()
-_SINGLE_INSTANCE_TIMEOUT_MS = 1000
+_SINGLE_INSTANCE_TIMEOUT_MS = 150
+_SINGLE_INSTANCE_RETRY_COUNT = 10
 
 
 class FloatingTaskTableWindow(QMainWindow):
@@ -7334,31 +7338,49 @@ class MainWindow(QMainWindow):
                 log_exception(e, context="db.close", db_path=self.db.path)
 
 
-def _single_instance_server_name() -> str:
-    identity = f"{APP_STORAGE_ORGANIZATION}:{APP_STORAGE_NAME}:{Path(app_data_dir()).resolve()}"
+def _single_instance_server_name(app_uid: str | None = None) -> str:
+    identity = str(app_uid or APP_UID).strip() or APP_UID
+    digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:16]
+    slug = "".join(
+        ch.lower() if ch.isalnum() else "-"
+        for ch in str(APP_LOG_SLUG or APP_STORAGE_NAME or "app")
+    ).strip("-") or "app"
+    slug = slug[:24]
+    endpoint = f"{slug}-{digest}"
+    if sys.platform.startswith(("darwin", "linux")):
+        return str(Path("/tmp") / f"{endpoint}.sock")
+    return endpoint
+
+
+def _single_instance_lock_path(app_uid: str | None = None) -> str:
+    identity = str(app_uid or APP_UID).strip() or APP_UID
     digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()
-    slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in APP_STORAGE_NAME).strip("-") or "app"
-    return f"{slug}-{digest}"
+    return str(Path(app_data_dir()) / f".{digest}.singleton.lock")
 
 
 def _request_existing_instance_activation(
     server_name: str,
     *,
     timeout_ms: int = _SINGLE_INSTANCE_TIMEOUT_MS,
+    attempts: int = _SINGLE_INSTANCE_RETRY_COUNT,
 ) -> bool:
-    socket = QLocalSocket()
-    socket.connectToServer(server_name)
-    if not socket.waitForConnected(timeout_ms):
-        return False
-    try:
-        socket.write(b"activate")
-        socket.flush()
-        socket.waitForBytesWritten(timeout_ms)
-        return True
-    finally:
-        socket.disconnectFromServer()
-        if socket.state() != QLocalSocket.LocalSocketState.UnconnectedState:
-            socket.waitForDisconnected(timeout_ms)
+    for attempt in range(max(1, int(attempts))):
+        socket = QLocalSocket()
+        socket.connectToServer(server_name)
+        if socket.waitForConnected(timeout_ms):
+            try:
+                socket.write(b"activate")
+                socket.flush()
+                socket.waitForBytesWritten(timeout_ms)
+                return True
+            finally:
+                socket.disconnectFromServer()
+                if socket.state() != QLocalSocket.LocalSocketState.UnconnectedState:
+                    socket.waitForDisconnected(timeout_ms)
+        socket.abort()
+        if attempt + 1 < max(1, int(attempts)):
+            time.sleep(timeout_ms / 1000.0)
+    return False
 
 
 def _build_single_instance_server(server_name: str, on_activate) -> QLocalServer:
@@ -7387,32 +7409,47 @@ def _build_single_instance_server(server_name: str, on_activate) -> QLocalServer
 def _acquire_single_instance_guard(
     on_activate,
     *,
+    app_uid: str | None = None,
+    lock_path: str | None = None,
     server_name: str | None = None,
-) -> tuple[str, QLocalServer | None, bool]:
-    name = str(server_name or _single_instance_server_name())
+) -> tuple[QLockFile | None, str, QLocalServer | None, bool]:
+    uid = str(app_uid or APP_UID).strip() or APP_UID
+    name = str(server_name or _single_instance_server_name(uid))
+    lock = QLockFile(str(lock_path or _single_instance_lock_path(uid)))
+    lock.setStaleLockTime(0)
     server = _build_single_instance_server(name, on_activate)
-    if server.listen(name):
-        return name, server, False
+    if lock.tryLock(0):
+        if server.listen(name):
+            return lock, name, server, False
+        QLocalServer.removeServer(name)
+        if server.listen(name):
+            return lock, name, server, False
+        lock.unlock()
+        raise RuntimeError(f"Could not establish the single-instance listener '{name}'.")
     if _request_existing_instance_activation(name):
-        return name, None, True
-    QLocalServer.removeServer(name)
-    if server.listen(name):
-        return name, server, False
-    if _request_existing_instance_activation(name):
-        return name, None, True
+        return None, name, None, True
     raise RuntimeError(f"Could not establish the single-instance listener '{name}'.")
 
 
-def _release_single_instance_guard(server_name: str, server: QLocalServer | None):
-    if server is None:
+def _release_single_instance_guard(
+    lock: QLockFile | None,
+    server_name: str,
+    server: QLocalServer | None,
+):
+    if server is not None:
+        try:
+            server.close()
+        finally:
+            try:
+                QLocalServer.removeServer(server_name)
+            except Exception:
+                pass
+    if lock is None:
         return
     try:
-        server.close()
-    finally:
-        try:
-            QLocalServer.removeServer(server_name)
-        except Exception:
-            pass
+        lock.unlock()
+    except Exception:
+        pass
 
 
 def main():
@@ -7423,6 +7460,10 @@ def main():
         app.setApplicationName(APP_STORAGE_NAME)
         app.setApplicationDisplayName(APP_NAME)
         app.setApplicationVersion(APP_VERSION)
+        try:
+            app.setDesktopFileName(APP_UID)
+        except Exception:
+            pass
 
         pending_activate_request = False
         main_window: MainWindow | None = None
@@ -7436,14 +7477,16 @@ def main():
             main_window._show_main_window()
             app.setActiveWindow(main_window)
 
-        single_instance_name, single_instance_server, already_running = _acquire_single_instance_guard(
+        single_instance_lock, single_instance_name, single_instance_server, already_running = _acquire_single_instance_guard(
             _activate_existing_window
         )
+        if single_instance_lock is not None:
+            app._single_instance_lock = single_instance_lock
         if single_instance_server is not None:
             app._single_instance_server = single_instance_server
             app.aboutToQuit.connect(
-                lambda name=single_instance_name, server=single_instance_server: _release_single_instance_guard(
-                    name, server
+                lambda lock=single_instance_lock, name=single_instance_name, server=single_instance_server: _release_single_instance_guard(
+                    lock, name, server
                 )
             )
         if already_running:

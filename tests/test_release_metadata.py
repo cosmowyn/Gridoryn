@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 
 import buildfile
-from app_metadata import APP_NAME, APP_LOG_SLUG, APP_STORAGE_NAME
+from app_metadata import APP_NAME, APP_LOG_SLUG, APP_STORAGE_NAME, APP_UID
 from demo_data import build_demo_payload
 
 
@@ -13,6 +13,7 @@ def test_release_metadata_uses_stable_product_name():
     assert APP_NAME == "Gridoryn"
     assert APP_STORAGE_NAME == "Gridoryn"
     assert APP_LOG_SLUG == "gridoryn"
+    assert APP_UID == "com.gridoryn.desktop"
     assert buildfile.APP_NAME == APP_NAME
     assert buildfile._release_basename().startswith("Gridoryn-2.0.0-")
 
